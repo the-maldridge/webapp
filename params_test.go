@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -304,5 +305,100 @@ func TestFormHelpers(t *testing.T) {
 	}
 	if gotCount != 2 {
 		t.Errorf("FormValues returned %d fields, want 2", gotCount)
+	}
+}
+
+// TestTypedFormHelpers is the reason those helpers exist rather than a
+// strconv call at each site: a numeric form field must report a bad value
+// instead of handing the handler a zero that looks like an answer.
+func TestTypedFormHelpers(t *testing.T) {
+	t.Parallel()
+
+	form := func(body string) *http.Request {
+		req := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		return req
+	}
+
+	t.Run("int", func(t *testing.T) {
+		if v, err := FormInt(form("n=7"), "n"); err != nil || v != 7 {
+			t.Errorf("FormInt = (%d, %v), want (7, nil)", v, err)
+		}
+		if _, err := FormInt(form("n="), "n"); !ErrBadInput(err) {
+			t.Errorf("FormInt blank error = %v, want *BadInput: a required field left empty is not zero", err)
+		}
+		if _, err := FormInt(form("n=abc"), "n"); !ErrBadInput(err) {
+			t.Errorf("FormInt junk error = %v, want *BadInput", err)
+		}
+		if v, err := FormIntDefault(form(""), "n", 3); err != nil || v != 3 {
+			t.Errorf("FormIntDefault absent = (%d, %v), want (3, nil)", v, err)
+		}
+	})
+
+	t.Run("uint", func(t *testing.T) {
+		if v, err := FormUint(form("id=42"), "id"); err != nil || v != 42 {
+			t.Errorf("FormUint = (%d, %v), want (42, nil)", v, err)
+		}
+		// The case that matters: a hidden input that arrived empty must not
+		// silently create a row owned by key zero.
+		if v, err := FormUint(form("id="), "id"); err == nil || v != 0 {
+			t.Errorf("FormUint blank = (%d, %v), want (0, *BadInput)", v, err)
+		}
+		if _, err := FormUint(form("id=-1"), "id"); !ErrBadInput(err) {
+			t.Errorf("FormUint negative error = %v, want *BadInput", err)
+		}
+	})
+
+	t.Run("bool", func(t *testing.T) {
+		if v, err := FormBool(form(""), "flag"); err != nil || v {
+			t.Errorf("FormBool absent = (%v, %v), want (false, nil)", v, err)
+		}
+		if v, err := FormBool(form("flag=false"), "flag"); err != nil || v {
+			t.Errorf("FormBool false = (%v, %v), want (false, nil)", v, err)
+		}
+		if v, err := FormBool(form("flag=1"), "flag"); err != nil || !v {
+			t.Errorf("FormBool 1 = (%v, %v), want (true, nil)", v, err)
+		}
+		if _, err := FormBool(form("flag=nope"), "flag"); !ErrBadInput(err) {
+			t.Errorf("FormBool junk error = %v, want *BadInput", err)
+		}
+	})
+
+	t.Run("date", func(t *testing.T) {
+		v, err := FormDate(form("day=2026-03-04"), "day")
+		if err != nil {
+			t.Fatalf("FormDate: %v", err)
+		}
+		if want := time.Date(2026, 3, 4, 0, 0, 0, 0, time.UTC); !v.Equal(want) {
+			t.Errorf("FormDate = %v, want %v", v, want)
+		}
+		if v, err := FormDate(form("day="), "day"); err != nil || !v.IsZero() {
+			t.Errorf("FormDate blank = (%v, %v), want zero time and no error", v, err)
+		}
+		if _, err := FormDate(form("day=04/03/2026"), "day"); !ErrBadInput(err) {
+			t.Errorf("FormDate junk error = %v, want *BadInput", err)
+		}
+	})
+}
+
+// TestQueryAndFormDatesAgree pins the shared layout list: a value a filter
+// accepts must not be rejected by the form carrying the same value.
+func TestQueryAndFormDatesAgree(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []string{"2026-01-02", "2026-01-02T03:04:05Z"} {
+		q := httptest.NewRequest(http.MethodGet, "/x?day="+raw, nil)
+		f := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader("day="+raw))
+		f.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+		qv, qerr := QueryDate(q, "day")
+		fv, ferr := FormDate(f, "day")
+		if qerr != nil || ferr != nil {
+			t.Errorf("%q: query %v, form %v", raw, qerr, ferr)
+			continue
+		}
+		if !qv.Equal(fv) {
+			t.Errorf("%q: query %v differs from form %v", raw, qv, fv)
+		}
 	}
 }

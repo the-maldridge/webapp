@@ -134,16 +134,15 @@ func QueryDate(r *http.Request, name string) (time.Time, error) {
 	if raw == "" {
 		return time.Time{}, nil
 	}
-	for _, layout := range []string{time.RFC3339, "2006-01-02"} {
-		if t, err := time.Parse(layout, raw); err == nil {
-			return t, nil
+	t, ok := parseDateValue(raw)
+	if !ok {
+		return time.Time{}, &BadInput{
+			Name:   name,
+			Value:  raw,
+			Reason: "must be an ISO date (YYYY-MM-DD) or an RFC 3339 timestamp",
 		}
 	}
-	return time.Time{}, &BadInput{
-		Name:   name,
-		Value:  raw,
-		Reason: "must be an ISO date (YYYY-MM-DD) or an RFC 3339 timestamp",
-	}
+	return t, nil
 }
 
 // Page reads the paging parameters from a request and clamps them with
@@ -173,19 +172,145 @@ func Page(r *http.Request) (page, size int, err error) {
 // every field as missing rather than reporting the real cause, which is
 // usually an unreadable or oversized body.
 func FormString(r *http.Request, name string) (string, error) {
+	raw, err := formRaw(r, name)
+	if err != nil {
+		return "", err
+	}
+	return raw, nil
+}
+
+// formRaw is the single place a form field is read, so that every typed
+// helper reports an unparseable body the same way rather than each
+// inventing its own idea of what a failed parse means.
+func formRaw(r *http.Request, name string) (string, error) {
 	if err := parseForm(r); err != nil {
 		return "", &BadInput{Name: name, Reason: "request body could not be parsed", Cause: err}
 	}
 	return r.PostFormValue(name), nil
 }
 
+// FormInt reads a required numeric form field.
+//
+// A blank value is an error rather than zero, which differs on purpose
+// from QueryInt: an absent query parameter is a filter that was not
+// applied, while a blank numeric input is a required field the user did
+// not fill in, and zero is a legitimate answer that must not stand in for
+// one. Use FormIntDefault when the field really is optional.
+func FormInt(r *http.Request, name string) (int, error) {
+	raw, err := formRaw(r, name)
+	if err != nil {
+		return 0, err
+	}
+	if raw == "" {
+		return 0, &BadInput{Name: name, Reason: "is required"}
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, &BadInput{Name: name, Value: raw, Reason: "must be an integer", Cause: err}
+	}
+	return v, nil
+}
+
+// FormIntDefault reads an optional numeric form field, treating a blank
+// value as not supplied.
+func FormIntDefault(r *http.Request, name string, def int) (int, error) {
+	raw, err := formRaw(r, name)
+	if err != nil {
+		return def, err
+	}
+	if raw == "" {
+		return def, nil
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		return def, &BadInput{Name: name, Value: raw, Reason: "must be an integer", Cause: err}
+	}
+	return v, nil
+}
+
+// FormUint reads a required form field holding an unsigned integer, which
+// is what a hidden input or a select of foreign keys submits.
+//
+// This is the helper that keeps an id out of the failure the whole API
+// exists to close: a discarded parse error turns "" or "abc" into key
+// zero, and the new row belongs to whatever owns zero.
+func FormUint(r *http.Request, name string) (uint64, error) {
+	raw, err := formRaw(r, name)
+	if err != nil {
+		return 0, err
+	}
+	if raw == "" {
+		return 0, &BadInput{Name: name, Reason: "is required"}
+	}
+	v, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return 0, &BadInput{Name: name, Value: raw, Reason: "must be a non-negative integer", Cause: err}
+	}
+	return v, nil
+}
+
+// FormBool reads a form field as a boolean. Absent or blank means false,
+// which is what an unchecked checkbox looks like, since a browser omits it
+// entirely. A value that is present and unparseable is an error rather
+// than false, so a tampered or corrupted form is visible instead of
+// silently selecting the off state.
+func FormBool(r *http.Request, name string) (bool, error) {
+	raw, err := formRaw(r, name)
+	if err != nil {
+		return false, err
+	}
+	if raw == "" {
+		return false, nil
+	}
+	v, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, &BadInput{Name: name, Value: raw, Reason: "must be a boolean", Cause: err}
+	}
+	return v, nil
+}
+
+// FormDate reads a form field holding a date, accepting what an
+// <input type="date"> submits as well as a full timestamp.
+func FormDate(r *http.Request, name string) (time.Time, error) {
+	raw, err := formRaw(r, name)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if raw == "" {
+		return time.Time{}, nil
+	}
+	t, ok := parseDateValue(raw)
+	if !ok {
+		return time.Time{}, &BadInput{
+			Name:   name,
+			Value:  raw,
+			Reason: "must be an ISO date (YYYY-MM-DD) or an RFC 3339 timestamp",
+		}
+	}
+	return t, nil
+}
+
 // FormValues reads all submitted form values. The body size is already
-// bounded by the framework; see DefaultMaxFormBytes.
+// bounded by the framework; see DefaultMaxBodyBytes.
 func FormValues(r *http.Request) (url.Values, error) {
 	if err := parseForm(r); err != nil {
 		return nil, &BadInput{Reason: "request body could not be parsed", Cause: err}
 	}
 	return r.PostForm, nil
+}
+
+// parseDateValue tries the accepted layouts in a fixed order and reports
+// whether any matched the whole string. Sharing it between the query and
+// form helpers is the point: two lists of layouts drift apart, and then a
+// date accepted by a filter is rejected by the form that was just
+// submitted with the same value.
+func parseDateValue(raw string) (time.Time, bool) {
+	for _, layout := range []string{time.RFC3339, "2006-01-02"} {
+		if t, err := time.Parse(layout, raw); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }
 
 // parseForm parses the body once, relying on net/http's memoization so
