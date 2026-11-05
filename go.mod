@@ -3,6 +3,7 @@ module github.com/the-maldridge/webapp
 go 1.26.0
 
 require (
+	github.com/go-chi/chi/v5 v5.3.2
 	gorm.io/driver/postgres v1.6.3
 	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gorm v1.31.2
