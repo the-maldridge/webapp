@@ -663,57 +663,164 @@ request path, is what marks the active item without any handler declaring which 
 
 ### 8.5 Static assets
 
-The framework's own assets ship embedded and are served at `/static/core/`. Embedded files have
-no modification time, so the file server has no validator to offer; `Cache-Control: public,
-max-age=3600` is set deliberately rather than falling out of the transport, and `Asset("x.css")`
-stamps the URL with the build version so a browser that cached the previous deploy asks again.
-Query-parameter stamping rather than filename rewriting because the assets are embedded: there is
-no build step in which `app.a4f3c1.css` could be produced.
+The framework's own assets ship embedded and are served at `/static/core/`. A module's are served
+at `/static/<namespace>/`, which is what lets two modules ship `app.css` without either
+overwriting the other; a namespace is validated at startup against the framework's, and templates
+and assets may share a name because they are different address spaces.
 
-Not yet implemented: per-module asset namespaces under `/static/` with ETags, so that two modules
-cannot ship different files at the same address, and vendoring third-party CSS/JS through
-`go:generate`.
+Embedded files have no modification time, so the file server has no validator to offer and a
+browser re-downloads a stylesheet forever. The framework therefore fingerprints each asset tree at
+startup and sets an `ETag` per request, which makes `If-None-Match` answer 304; `Cache-Control:
+public, max-age=3600` is set deliberately rather than falling out of the transport, and `Asset`
+and `ModuleAsset` stamp the URL with the build version so a browser that cached the previous
+deploy asks again. Query-parameter stamping rather than filename rewriting because the assets are
+embedded: there is no build step in which `app.a4f3c1.css` could be produced.
+
+Not yet implemented: vendoring third-party CSS/JS through `go:generate`.
 
 
 ## 9. Modules
 
 For applications large enough to have independent feature areas, a registry lets a package
-contribute routes, templates, migrations, permissions, and navigation, and be enabled or disabled
+contribute routes, templates, assets, schema, permissions, and navigation, and be enabled or disabled
 by configuration.
 
 ```go
 type ModuleInfo struct {
-    Name         string
-    Scopes       []string   // restrict to a deployment mode; empty means all
+    Name         string   // identity in configuration, the dependency graph, and errors
+    Scopes       []string // restrict to a deployment role; empty means every role
     Dependencies []string
     Required     bool
     Permissions  []auth.Perm
     Factory      func(s *webapp.Scope) (any, error)
 }
 
-func Register(ModuleInfo) // panics on duplicate name, or a required module depending on an optional one
+func Register(ModuleInfo)             // panics: a bad registration is a defect in the code compiled
+func WithModule(...ModuleInfo) Option // reports the same problems as errors
 ```
 
-A module's value satisfies, by assertion, whichever of these it implements:
+Two entry points, one validator. `Register` is what a module's own package initialisation calls, so
+it panics: initialisation has no error to return, and the alternative is a `MustRegister` that the
+application author either never calls or ignores. `WithModule` is what `main()` calls to assemble
+modules only this application sees, where a defective description is properly an error from `New`.
+Both run the same validation, because the two drifting apart would produce a module that is valid in
+one binary and invalid in another. Names are compared case-insensitively, and a name claimed both in
+the global registry and by `WithModule` is an error rather than a precedence: two definitions of one
+module is exactly the ambiguity a name exists to remove.
+
+### 9.1 Capabilities
+
+A module's value is asked which of these it is, and every one it satisfies is applied at startup:
 
 ```go
-type Router interface{ Routes(r webapp.Router) }
-type Migrator interface{ Migrate() error }
-type Templater interface{ Templates() (string, fs.FS) } // namespace + root
+type RouteContributor interface{ Routes(r webapp.Router) }
+type Templater interface{ Templates() (namespace string, fsys fs.FS) }
+type Staticer interface{ Static() (namespace string, fsys fs.FS) }
 type Navigator interface{ Nav() []webapp.NavItem }
 ```
 
-Resolution: filter by scope → apply the `APP_MODULES` whitelist → validate dependencies →
-topological sort with alphabetical tie-breaking → instantiate in order. Deterministic ordering
-matters because seed data and navigation order should be reproducible across boots and
-machines.
+They are separate interfaces rather than one `Module` interface because a module with no templates
+should not write an empty `Templates` method to satisfy a contract, and because an application
+asserting one capability should not have to know the others exist.
 
-Rules for the registry, learned from the hard way: factories must return an error, and startup
-aborts on it. A factory that returns `nil, nil` on failure yields a typed-nil interface that
-compiles, registers, and panics on first use three layers away from the actual problem. Modules
-that want another module's behaviour depend on a consumer-declared interface and type-assert the
-deps map, which keeps dependencies acyclic and lets a module degrade gracefully when an optional
-collaborator is absent.
+Schema contribution is deliberately absent from the list. A module that owns tables implements the
+same `Component` (`Models() []any`) and `Migrator` (`Migrate(ctx, *db.DB) error`) interfaces every
+other component already implements, so there is one rule about what syncs and what migrates instead
+of a parallel pair whose two signatures nobody can keep straight. This design previously listed a
+module `Router` and a module `Migrator` here; the first collides with the existing `webapp.Router`
+and the second would only ever be confused with the component one, so neither exists. `Staticer` was
+missing from the design and is here because assets need the same namespace discipline as
+templates (§8.5).
+
+Namespaces are validated rather than trusted: legal to write in a template name, never `core` (the
+framework's) or `dev` (the debug overlay's), never already claimed. Template namespaces and static
+URL prefixes are checked against separate claim maps, because they are different address spaces that
+happen to be spelled alike; sharing one made the ordinary case, a module mounting both templates and
+assets under its own name, look like a collision. That was a real startup failure, and a test pins it
+now.
+
+### 9.2 Resolution and order
+
+Resolution is four steps: filter by scope, apply the `<PREFIX>_MODULES` whitelist, validate
+dependencies, topologically sort with alphabetical tie-breaking.
+
+A scope is a deployment fact, not a permission. It answers "is this process the kind that serves this
+feature?" for an application shipping one binary in several roles, which is otherwise expressed by
+build tags nobody outside the release engineer can reproduce; who may use the feature remains the
+permissions' business. Matching is case-insensitive and an unset scope loads everything, which is the
+right default for the single-role deployment most applications are. A whitelist entry naming nothing
+registered is an error listing what is, because the failure mode of ignoring it is a deployment
+quietly missing a feature; a whitelist entry naming a module that exists but is out of scope is not
+an error, because that is one variable shared correctly across roles. Required modules survive any
+whitelist.
+
+Dependency validation reports three distinct causes, not registered, not in scope, and not enabled,
+because "add it to `APP_MODULES`" is wrong advice for the first two. A required module may depend
+only on required modules, checked in both directions at registration so whichever initialises first
+still catches it, rather than at deploy time by an operator who cannot tell which of two modules is
+the mistake.
+
+The sort is Kahn's algorithm with the candidate set re-sorted alphabetically each round, which makes
+the result a function of the graph rather than of Go's map iteration order. Determinism is not
+cosmetic: seed rows written during migration and the order navigation appears in are both derived
+from it, and a site whose menu shuffles between boots looks broken whether or not anything is.
+
+Startup then makes three passes over the plan. The first instantiates each module and immediately
+syncs its models and runs its migration before the next module starts. The second mounts template and
+asset namespaces and collects navigation. The third registers routes, last, so a module that resolves
+a collaborator while wiring a route finds every collaborator constructed. Interleaving instantiation
+with schema, rather than all factories and then all migrations, is what lets a module's migration
+read a table its dependency seeded. A failure in any pass aborts construction with the database
+closed: half a module set means navigation pointing at routes that were never registered, and that is
+a failure an operator learns about from a complaint rather than from a startup log.
+
+Routes are registered into a router group, which is what gives a module's middleware a scope it
+cannot leak out of. Applied to the shared router, a module's `Use` would attach its handler to every
+route registered after it, by another module, in an order no author can read from their own file. A
+duplicate path panics inside the router; that panic is converted into a construction error for the
+same reason a factory panic is.
+
+### 9.3 Collaboration
+
+A factory receives a `*Scope`: `Name`, `App`, `DB`, `Config`, `Log` (with the module name already
+stamped on every record), `Deps`, `Get(name)`, and `MustDependency(name)`.
+
+Modules do not import each other in order to call each other. A module that needs a collaborator
+declares an interface containing the methods it uses and asserts the value from the dependency map:
+
+```go
+type indexer interface{ Index(ctx context.Context, doc Doc) error }
+
+if found, ok := s.Get("search"); ok {
+    if ix, ok := found.(indexer); ok {
+        svc.indexer = ix
+    }
+}
+```
+
+The dependency arrow then points from the consumer, which keeps the graph acyclic by construction and
+lets a module degrade when an optional collaborator is absent rather than refuse to start.
+`MustDependency` is for the cases where degrading is the wrong answer; its error names the missing
+module, so the factory's failure says what to fix.
+
+For an application that wants to call a module rather than only route to it, `App.Module(name)`
+returns the value a factory produced and `App.LoadedModules()` the order they loaded in, while
+`App.Permissions()` and `App.ModuleOwner(perm)` answer what the running application can be asked to
+allow and which module owns each grant. The interface asserted on the result is the application's to
+declare, which is the same rule a module follows with its own collaborators.
+
+### 9.4 What aborts startup
+
+| Condition | Why it cannot be allowed to start |
+|---|---|
+| Factory returns `nil, nil`, or a typed-nil pointer, map, slice, func, or channel | A typed-nil satisfies every interface, registers, wires up, and panics on first use three layers from the cause |
+| Factory returns an error, or panics | A panic is reported as an error naming the module; neither becomes a half-built application |
+| Dependency missing, disabled, or excluded by scope | The dependent module would serve requests it cannot answer |
+| Whitelist names an unregistered module | A typo in an enable list otherwise reads as success |
+| Namespace collision, or `core` / `dev` | Two sources for one template name resolves differently per deployment |
+| Two modules own the same permission | The grant means different things depending on load order |
+| Required module depends on optional | Required and broken at the same time |
+| Dependency cycle | Reported with the set of modules stuck in it, not by the sort hanging |
 
 ## 10. Input handling (`webapp`)
 
@@ -814,6 +921,7 @@ TASKS_DB_DRIVER       sqlite | postgres               sqlite
 TASKS_DB              sqlite path                     <app>.db
 TASKS_DB_DSN          postgres DSN                    required for postgres
 TASKS_COOKIE_SECURE   Secure cookie attribute         true unless TASKS_DEBUG
+TASKS_SCOPE           deployment role this process serves  unset (all roles)
 TASKS_MODULES         enabled optional modules        all
 AUTHWARE_SESSION_KEY  session signing key             required in production
 AUTHWARE_SESSION_LIFETIME session lifetime            1h
@@ -865,7 +973,7 @@ a documented recommendation.
 | Login failures that disclose whether an account exists, by message or by timing | one sentinel error on every failure path, identical response body, a real bcrypt round for unknown accounts |
 | A session identity taken from a body or query field, so "whose row is this" is whoever posted said | identity and profile ID come from the request context; `RequireOwnership` reads only there |
 | Global filter registries mutated from constructors, racing at boot | framework-owned pure filters registered in `init()` |
-| Module factories swallowing errors into typed-nil interfaces | `Factory` must return an error; startup aborts |
+| Module factories swallowing errors into typed-nil interfaces | `Factory` must return an error; a nil or typed-nil value aborts startup (§9.4) |
 | `os.Exit` called from constructors; dropped context cancel functions | errors returned; `Run()` owns the lifecycle |
 | Relative `extends` paths coupling templates to directory depth | namespace-aware loader |
 | ID parsing that silently yields zero | typed parameter helpers that report parse errors |
@@ -906,7 +1014,9 @@ login and logout handlers.
 `Share`, navigation.
 
 **M4 — modules and polish.** Registry, scopes, capability interfaces, static asset namespacing,
-`NewTestApp`/`testas`, example application, package documentation.
+`NewTestApp`/`testas`, example application, package documentation. Built: the registry
+(`Register`/`WithModule`), scope selection, the four capability interfaces, per-module template and
+asset namespaces with `ETag`s (§9). Remaining: the test helpers and the example application.
 
 M4 was originally "forms": binding, validation, re-render helpers, typed parameters, pagination.
 Typed parameters, pagination, and the re-render contract turned out to belong to the request spine
