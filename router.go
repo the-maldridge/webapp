@@ -4,6 +4,8 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/the-maldridge/webapp/auth"
 )
 
 // Router is the routing surface an application sees. It mirrors chi,
@@ -67,6 +69,28 @@ func (r Router) HandleErr(pattern string, h HandlerErr) {
 // Method registers a handler for one method at pattern.
 func (r Router) Method(method, pattern string, h http.Handler) {
 	r.inner.Method(method, pattern, h)
+}
+
+// Guard returns the handler wrapped in a permission check.
+//
+// The check belongs at registration rather than inside the handler because a
+// handler that forgot to check is indistinguishable from one that never needed
+// to: the failure is silent, and it gets discovered by an attacker rather than
+// by a test.
+func (r Router) Guard(p auth.Perm, h http.HandlerFunc) http.HandlerFunc {
+	return r.app.Guarded(p, h)
+}
+
+// RequireLogin returns the handler wrapped in an identity check.
+func (r Router) RequireLogin(h http.HandlerFunc) http.HandlerFunc {
+	return r.app.Guarded(auth.Perm{}, h)
+}
+
+// Public returns the handler unchanged, under a name that records the
+// decision. Paired with an application that gates by default, it makes every
+// route state whether it needs an identity.
+func (r Router) Public(h http.HandlerFunc) http.HandlerFunc {
+	return r.app.Public(h)
 }
 
 // MethodErr registers an error-returning handler for one method.

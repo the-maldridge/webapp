@@ -19,6 +19,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/the-maldridge/webapp/auth"
 	"github.com/the-maldridge/webapp/db"
 )
 
@@ -55,6 +56,14 @@ type App struct {
 
 	// errorPage renders error responses; installed by SetErrorPage.
 	errorPage func(http.ResponseWriter, *http.Request, int, error, string)
+
+	// auth is the installed authentication service, nil when the
+	// application has none. InstallAuth sets it.
+	auth *auth.Service
+
+	// extensions are middleware appended with Use, spliced into the chain
+	// after the security headers and before the router.
+	extensions []func(http.Handler) http.Handler
 
 	// server is set by ServeListener and read by Shutdown.
 	server *http.Server

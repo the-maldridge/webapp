@@ -52,7 +52,31 @@ func (a *App) installStack() {
 	mux.MethodNotAllowed(a.methodNotAllowed)
 	a.mux = mux
 
-	a.Handler = handlerChain([]func(http.Handler) http.Handler{
+	a.rebuildChain()
+}
+
+// chain assembles the middleware chain around the router, including anything
+// appended with Use.
+//
+// It is a method rather than a one-time assignment because the chain has to be
+// rebuildable: authentication middleware is installed after construction, once
+// a database handle exists, and chi's Use is unavailable for the reasons above.
+// Rebuilding is cheap — it is a closure composition, done once per install, not
+// per request — and it means the chain's order is stated in exactly one place.
+func (a *App) chain() http.Handler {
+	entries := append(coreChainEntries(a), a.extensions...)
+	return handlerChain(entries, a.mux)
+}
+
+// rebuildChain recomputes Handler from the built-in chain plus whatever has
+// been appended with Use.
+func (a *App) rebuildChain() {
+	a.Handler = a.chain()
+}
+
+// coreChainEntries returns the built-in half of the chain, outermost first.
+func coreChainEntries(a *App) []func(http.Handler) http.Handler {
+	return []func(http.Handler) http.Handler{
 		a.trackWrites,
 		requestID,
 		a.clientIP,
@@ -62,7 +86,7 @@ func (a *App) installStack() {
 		middleware.Compress(5),
 		middleware.Heartbeat(HeartbeatPath),
 		a.secureHeaders,
-	}, mux)
+	}
 }
 
 // handlerChain composes middleware around a final handler, applying the
