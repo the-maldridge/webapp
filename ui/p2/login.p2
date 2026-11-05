@@ -1,0 +1,56 @@
+{% extends "@core/base.p2" %}
+
+{% comment %}
+  Sign-in form.
+
+  The form posts to itself and the password field is never repopulated. A
+  framework that remembered a submitted password so the user could "try again"
+  would write it into the browser's form state, and into whatever a misconfigured
+  cache stored of the page.
+
+  The failure message is one value for every reason the attempt failed, and it is
+  the caller's job to pass that one value: the difference between "no such
+  account" and "wrong password" is what an enumeration attack reads.
+{% endcomment %}
+
+{% block title %}Sign in · {{ siteTitle|default:"Application" }}{% endblock %}
+{% block bodyclass %}page page-login{% endblock %}
+
+{% block content %}
+<section class="login-card">
+  <h1 class="login-heading">Sign in</h1>
+
+  {% if loginError %}
+  <p class="login-error" role="alert">{{ loginError }}</p>
+  {% endif %}
+
+  <form class="login-form" method="post" action="{{ action|default:'/login' }}">
+    {{ csrfInput }}
+
+    <label class="field">
+      <span class="field-label">Username</span>
+      <input
+        type="text"
+        name="username"
+        value="{{ username|default:'' }}"
+        autocomplete="username"
+        autocapitalize="none"
+        spellcheck="false"
+        required>
+    </label>
+
+    <label class="field">
+      <span class="field-label">Password</span>
+      <input
+        type="password"
+        name="password"
+        autocomplete="current-password"
+        required>
+    </label>
+
+    {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+
+    <button type="submit" class="button button--primary">Sign in</button>
+  </form>
+</section>
+{% endblock %}

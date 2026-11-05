@@ -1,0 +1,196 @@
+/*
+  Framework stylesheet.
+
+  Deliberately small and deliberately boring. Its job is to make the pages the
+  framework renders legible and to define the handful of hooks an application
+  or theme styles against, because a framework that ships an opinionated design
+  has to defend that design forever and has to be unbundled before anyone can
+  use their own.
+
+  Everything is namespaced under the framework's own elements. Nothing here
+  styles a bare element in a way an application's markup would inherit, since
+  the one thing a stylesheet in a library reliably gets wrong is assuming it is
+  the only one.
+*/
+
+:root {
+  --wa-space: 1rem;
+  --wa-radius: 6px;
+  --wa-line: #d5d9df;
+  --wa-text: #1b1f24;
+  --wa-muted: #5a636d;
+  --wa-bg: #ffffff;
+  --wa-bg-alt: #f6f8fa;
+  --wa-accent: #1a5fb4;
+  --wa-danger: #a51d2d;
+  --wa-font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --wa-mono: ui-monospace, "SFMono-Regular", "Cascadia Mono", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --wa-line: #3a3f46;
+    --wa-text: #e6e9ec;
+    --wa-muted: #a5adb6;
+    --wa-bg: #16181c;
+    --wa-bg-alt: #1f2227;
+    --wa-accent: #78aeff;
+    --wa-danger: #ff8f8f;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: var(--wa-font);
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--wa-text);
+  background: var(--wa-bg);
+}
+
+a { color: var(--wa-accent); }
+
+code, pre { font-family: var(--wa-mono); font-size: 0.9em; }
+
+.site-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--wa-space);
+  padding: var(--wa-space);
+  border-bottom: 1px solid var(--wa-line);
+}
+
+.site-name {
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.site-main {
+  max-width: 68rem;
+  padding: var(--wa-space);
+}
+
+.site-footer {
+  padding: var(--wa-space);
+  border-top: 1px solid var(--wa-line);
+  color: var(--wa-muted);
+}
+
+.site-build { margin: 0; font-size: 0.8em; }
+
+.site-nav {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--wa-space);
+}
+
+.nav-list,
+.nav-sublist {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--wa-space) / 2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nav-sublist { width: 100%; }
+
+.nav-item--active > a { font-weight: 600; text-decoration: none; }
+
+.nav-signout { margin: 0; }
+
+/* Forms. Fields are block-level and their labels are text, so an application
+   can lay them out differently without undoing anything here. */
+
+.field {
+  display: block;
+  margin-bottom: var(--wa-space);
+}
+
+.field-label {
+  display: block;
+  font-size: 0.9em;
+  color: var(--wa-muted);
+}
+
+input, textarea, select, button {
+  font: inherit;
+  color: inherit;
+}
+
+input[type="text"],
+input[type="password"],
+input[type="email"],
+input[type="search"],
+input[type="number"],
+input[type="date"],
+textarea,
+select {
+  display: block;
+  width: 100%;
+  max-width: 28rem;
+  padding: 0.4rem 0.5rem;
+  background: var(--wa-bg);
+  border: 1px solid var(--wa-line);
+  border-radius: var(--wa-radius);
+}
+
+.button {
+  display: inline-block;
+  padding: 0.4rem 0.9rem;
+  background: var(--wa-bg-alt);
+  color: inherit;
+  border: 1px solid var(--wa-line);
+  border-radius: var(--wa-radius);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.button--primary {
+  background: var(--wa-accent);
+  border-color: var(--wa-accent);
+  color: #fff;
+}
+
+.login-card,
+.error-card {
+  max-width: 28rem;
+  padding: var(--wa-space);
+  border: 1px solid var(--wa-line);
+  border-radius: var(--wa-radius);
+}
+
+.login-heading { margin-top: 0; }
+
+.login-error {
+  padding: 0.5rem;
+  color: var(--wa-danger);
+  border: 1px solid var(--wa-danger);
+  border-radius: var(--wa-radius);
+}
+
+.error-status {
+  margin: 0;
+  font-size: 3rem;
+  line-height: 1;
+  color: var(--wa-muted);
+}
+
+.error-heading { margin: 0 0 var(--wa-space); }
+
+.error-detail {
+  padding: 0.5rem;
+  overflow-x: auto;
+  background: var(--wa-bg-alt);
+  border: 1px solid var(--wa-line);
+  border-radius: var(--wa-radius);
+  white-space: pre-wrap;
+}
+
+.error-reference { color: var(--wa-muted); }

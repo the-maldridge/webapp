@@ -1,0 +1,42 @@
+{% comment %}
+  Navigation fragment.
+
+  The items arrive already filtered: deciding whether a viewer may see a link
+  belongs to the authorization layer, and a template that re-implemented it here
+  would be a second answer to "what is TASKS:ADMIN" — one that disagrees with the
+  first as soon as the rules grow a case, and disagrees in the direction of
+  showing a link the route behind it then refuses.
+
+  The active item comes from pageBase, which the framework derives from the
+  request path, so a page cannot highlight the wrong thing by forgetting to say
+  where it is.
+{% endcomment %}
+<nav class="site-nav" aria-label="Primary">
+  <ul class="nav-list">
+    {% for item in navElements %}
+    <li class="nav-item{% if item.Base == pageBase %} nav-item--active{% endif %}">
+      <a href="{{ item.Href }}"{% if item.Base == pageBase %} aria-current="page"{% endif %}>
+        {%- if item.Icon %}<span class="nav-icon" aria-hidden="true">{{ item.Icon }}</span> {% endif -%}
+        {{ item.Label }}
+      </a>
+      {% if item.Children %}
+      <ul class="nav-sublist">
+        {% for child in item.Children %}
+        <li class="nav-item"><a href="{{ child.Href }}">{{ child.Label }}</a></li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </li>
+    {% empty %}
+    <li class="nav-item nav-item--empty">No sections available</li>
+    {% endfor %}
+  </ul>
+  {% if isAuthenticated %}
+  <form class="nav-signout" method="post" action="{{ signOutURL|default:'/logout' }}">
+    {{ csrfInput }}
+    <button type="submit" class="nav-signout-button">Sign out {{ user.Identity }}</button>
+  </form>
+  {% else %}
+  <p class="nav-signin"><a href="{{ signInURL|default:'/login' }}">Sign in</a></p>
+  {% endif %}
+</nav>

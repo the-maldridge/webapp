@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}{{ siteTitle|default:"Application" }}{% endblock %}</title>
+    <link rel="stylesheet" href="/static/core/css/app.css">
+    {% block head %}{% endblock %}
+  </head>
+  <body class="{% block bodyclass %}page{% endblock %}">
+    <header class="site-header">
+      {% block header %}
+      <a class="site-name" href="/">{{ siteTitle|default:"Application" }}</a>
+      {% include "@core/fragments/nav.p2" %}
+      {% endblock %}
+    </header>
+
+    <main class="site-main" id="main">
+      {% block content %}{% endblock %}
+    </main>
+
+    <footer class="site-footer">
+      {% block footer %}
+      <p class="site-build">build {{ buildVersion|default:"dev" }}</p>
+      {% endblock %}
+    </footer>
+  </body>
+</html>
