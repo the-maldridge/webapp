@@ -51,31 +51,33 @@ with no layer being well-integrated.
 | Templates | `github.com/flosch/pongo2/v6` | Django-syntax templates, `fs.FS` loading, template inheritance, autoescaping |
 | Database | `gorm.io/gorm`, generic API (`gorm.G[T]`) | Compile-checked, context-first queries; migrations; association loading |
 | Drivers | `gorm.io/driver/sqlite` (default), `gorm.io/driver/postgres` | Covers single-binary deploys through real multi-instance deploys |
-| AuthN | `github.com/the-maldridge/authware` | Pluggable authenticator registry, stateless encrypted session cookies |
+| AuthN | `github.com/the-maldridge/authware` | User type and context keys, stateless encrypted session cookie format |
 | Passwords | `golang.org/x/crypto/bcrypt` | Appropriate default work factor, no tuning required |
 | Logging | `log/slog` | Stdlib, structured, no configuration |
 
-Authware's `Authenticator` interface is the seam that keeps authentication open without the
-framework needing an abstraction of its own:
+Authentication is a `Service` owned by `webapp/auth`, configured through a mechanism chain rather
+than a global registry:
 
 ```go
-type Authenticator interface {
-    AuthUserPassword(context.Context, string, string) error
-    UserGroups(context.Context, string) (map[string]struct{})
+type Mechanism interface {
+    Verify(ctx context.Context, identity, password string) error
+    Groups(ctx context.Context, identity string) (map[string]struct{}, error)
     Name() string
 }
 ```
 
-Backends register themselves by name and a colon-separated environment variable
-(`AUTHWARE_BASIC_MECHS="htpasswd:myapp"`) selects and orders the chain, so an operator can move
-an application from a password file to LDAP to a database of local users without a code change.
+`Verify` returns an error rather than a bool-and-nil so that "this mechanism does not know that
+account" and "wrong password" stay distinguishable internally while collapsing to one indistinguishable
+failure on the way out. Token resolution and password upgrades are separate optional interfaces,
+so a backend that cannot write passwords does not have to pretend. The database mechanism is in the
+chain by default and an application appends or replaces the set with options; see §7.6.
 
 ## 3. Package layout
 
 ```
 webapp/            App, options, config, router, middleware, render funnel, errors, input handling, nav, static, modules
 webapp/db/         driver selection, pooling, pragmas, AutoMigrate + versioned migrations, upsert, paging
-webapp/auth/       authware wiring, hardened cookies, CSRF, permissions, guards, database-backed backend
+webapp/auth/       service, mechanism chain, hardened cookies, CSRF, permissions, guards, login handlers
 webapp/tmpl/       namespaced multi-loader, shared context, error adaptation, filters
 webapp/ui/         embedded core UI: base and login templates, error pages, nav fragment, static assets
 examples/tasks/    a complete application built on the framework
@@ -92,10 +94,19 @@ func main() {
     a, err := webapp.New(
         webapp.WithEnvPrefix("TASKS"),
         webapp.WithDBOptions(db.WithAutoMigrate(Task{})),
-        webapp.WithAuth(),
-        webapp.WithPermissions(PermTasksAdmin),
     )
     if err != nil {
+        return err
+    }
+    defer a.Close()
+
+    // Authentication needs the database, which does not exist until New has
+    // opened it, so it is installed rather than configured.
+    svc, err := auth.New(a.DB)
+    if err != nil {
+        return err
+    }
+    if err := a.InstallAuth(svc); err != nil {
         return err
     }
 
@@ -109,12 +120,18 @@ func main() {
         r.Post("/new", taskFormSubmit)
         r.Get("/{id}/edit", taskForm)
         r.Post("/{id}/edit", taskFormSubmit)
-        r.Post("/{id}/complete", a.Guard(auth.Perm("TASKS", "COMPLETE"), completeTask))
+        r.Post("/{id}/complete", r.Guard(auth.P("tasks", "complete"), completeTask))
     })
 
     return a.Run()
 }
 ```
+
+`InstallAuth` is a method rather than a construction option for the reason in its own comment: a
+service needs a database handle, and the auth tables have to be part of the schema decided before
+the first request. It splices the authentication, CSRF, and profile middleware into the chain
+immediately after the security headers, installs the denial renderer, and puts `user`,
+`isAuthenticated`, `csrfInput`, and `csrfToken` into every render context.
 
 Handlers are ordinary `http.HandlerFunc` values or methods on the application struct, which
 captures its own dependencies lexically. One addition is provided: `webapp.HandlerErr`, a
@@ -290,28 +307,67 @@ in tribal knowledge:
 
 ## 7. Authentication and authorization (`webapp/auth`)
 
-Authentication stays with authware: the mechanism chain, stateless AES-GCM encrypted session
-cookies, and `User{Identity, Groups, AuthedBy}` delivered through the request context.
+Authentication is a `Service` over the application's database: the mechanism chain, stateless
+AES-GCM encrypted session cookies, and `User{Identity, Groups, AuthedBy}` delivered through the
+request context. The cookie format is authware's, so an existing deployment's users survive the
+switch and a fleet of replicas agrees who is signed in without sharing anything; the package
+borrows authware's type aliases rather than defining its own user.
+
+The package returns plain `func(http.Handler) http.Handler` middleware and reports refusals
+through an injected `DenialHandler`. It does not import `webapp` and renders nothing, because it
+cannot know whether a client wanted a page or JSON, and does not own the error templates. The
+dependency points inward: everything framework-shaped lives in the core's auth wiring.
 
 ### 7.1 Sessions and cookies
 
-The framework issues sessions through the same codec but with hardened attributes: `HttpOnly`,
+The framework issues sessions through its own codec with hardened attributes: `HttpOnly`,
 `Path=/`, `SameSite=Lax`, and `Secure` unless explicitly disabled for a plain-HTTP deployment
-behind a TLS-terminating proxy. Session name and lifetime are configuration, not constants.
+behind a TLS-terminating proxy. Session name and lifetime are configuration, not constants, and
+the name carries the application's environment prefix so that two applications sharing a host
+cannot read each other's sessions.
 
-Session key policy is enforced at startup: `WithProduction()` refuses to boot without an
-explicit session key. A per-process random key silently invalidates every session on restart and
-makes horizontal scaling impossible, which is the kind of failure that gets attributed to the
-network.
+`SameSite` is `Lax` rather than `Strict` deliberately: `Strict` drops the session cookie on
+ordinary navigation from an external link, which breaks the return-from-payment-provider and
+click-a-link-from-an-email flows that every application eventually has. `Lax` still withholds the
+cookie on cross-site POSTs, which is the request CSRF actually cares about.
+
+Session key policy is enforced at startup: a production boot without an explicit session key is
+an error rather than a generated one. A per-process random key silently invalidates every session
+on restart and makes horizontal scaling impossible, which is the kind of failure that gets
+attributed to the network.
+
+A session carries the groups the user held when it was issued, so taking a group away takes effect
+when the session expires, not immediately. Making revocation instant would mean a database read on
+every request; an application that needs it calls `Service.HasPerm(ctx, identity, p)`, which reads
+through, rather than paying the round trip everywhere.
 
 ### 7.2 CSRF
 
-Double-submit, no server state: a `csrf_token` cookie signed with the session key, compared in
-constant time against the `X-CSRF-Token` header or a `csrf_token` form field. Enforced on unsafe
-methods for cookie-authenticated requests; skipped for HTTP Basic and bearer-token requests,
-which are not subject to cross-site forgery. Templates emit the hidden field with
-`{{ csrfInput|safe }}`; the framework's CSRF middleware reads the header or field, and the
-failure mode is a 400 with the form re-rendered rather than a state change.
+Double-submit, no server state: a `csrf_token` cookie signed with a key derived from the session
+key, compared in constant time against the `X-CSRF-Token` header or a `csrf_token` form field.
+The token's payload contains the identity it was minted for, so a token minted for one user cannot
+be replayed as another's, and it expires with the session. The derived key is HMAC over the
+session key with a domain-separating label, never the session key itself; see §12.
+
+Enforced on unsafe methods for cookie-authenticated requests, and for anonymous unsafe requests
+that arrived with the CSRF cookie — the condition a browser satisfies and an API client does not,
+which keeps anonymous JSON posts working while a cross-site login attempt is still checked.
+Skipped for requests whose `Authorization` header *verified*: a cross-site form cannot set that
+header, and a cross-origin fetch that could is stopped by CORS before the handler. The skip is
+gated on verification, because a request presenting a credential that failed has proved nothing
+about who sent it.
+
+Safe methods always ensure a token exists, including for anonymous requests, so the login form has
+one; a check that issues tokens only to signed-in users cannot protect the endpoint where a forged
+request is worth the most. The token a page renders comes from the request context, which is how a
+first-time visitor — who has no CSRF cookie — gets a form that submits successfully instead of an
+empty field and a guaranteed 403.
+
+Templates emit the hidden field with `{{ csrfInput }}`; the core wraps the already-escaped markup
+from `auth.CSRFInput` in `template.HTML` once, so no template needs a `|safe` filter and no token
+can carry markup. The failure mode is **403**. A forged request is not malformed input — every
+field in it is well formed, and the reason it is refused is authorization — and a 400 that
+re-renders the form hands whoever submitted it a description of what was expected.
 
 This is on by default for any route that authenticates by cookie. It is the single most common
 critical vulnerability in small server-rendered Go applications, and none of them should have to
@@ -324,39 +380,54 @@ Authorization is a two-part string, module and grant:
 ```go
 type Perm struct{ Module, Grant string } // e.g. {"TASKS", "ADMIN"}
 
-func P(module, grant string) Perm
-func (p Perm) String() string // "TASKS:ADMIN"
+func P(module, grant string) Perm        // upper-cases both halves
+func (p Perm) String() string            // "TASKS:ADMIN"
+func ParsePerm(s string) (Perm, error)   // strict: both halves required
 ```
 
-A user satisfies a permission with an exact match, `Module:ADMIN` for that module, or
-`CORE:ADMIN` for anything. Required permissions are declared at construction — globally with
-`WithPermissions`, per module with `ModuleInfo.Permissions` — and installed idempotently at
-boot, so the permission universe is inspectable without reading route definitions.
+A user satisfies a permission by exact match, `MODULE:ADMIN` for that module, or `CORE:ADMIN` for
+anything (`auth.CoreAdmin()`). There are no wildcards, no inheritance between grants, and no
+prefix matching on the module half: each of those rules has produced a grant broader than whoever
+wrote it intended, and "narrow and explodable in one direction only" is the property worth having
+here. An empty grant in a `Perm.String()` is malformed rather than "all grants in this module",
+because an accidentally-empty `Grant` field is a plausible bug and a bug that widens authority is
+worse than one that denies.
 
 Four ways to use a permission, all reading the same data:
 
 ```go
-r.Use(a.RequirePermission(auth.Perm("TASKS", "ADMIN")))         // route group
-r.Post("/nuke", a.Guard(auth.Perm("TASKS", "ADMIN"), handler))  // single handler
-if auth.Has(ctx, auth.Perm("TASKS", "EDIT")) { }                // inside a handler
-{% if user|hasPermission:"TASKS:EDIT" %}                        // template
+r.Use(a.Guard(auth.P("tasks", "admin")))            // route group
+r.Post("/nuke", r.Guard(auth.P("tasks", "admin"), handler)) // single handler
+if auth.HasPerm(r, auth.P("tasks", "edit")) { }     // inside a handler
+{% if user|hasPermission:"TASKS:EDIT" %}            // template
 ```
+
+`a.RequireLogin()` and `r.RequireLogin(h)` are the identity-only form of the same check.
 
 Navigation entries carry a required permission and are filtered per request, so users are never
 offered a link that will deny them.
 
-Ownership — the "may this user touch *this* row" question that a permission model does not
-answer — gets one helper, `a.RequireOwnership(ctx, ownerID)`, used by every mutating handler.
-Per-handler ad hoc ownership comparisons are how such applications end up with exactly one
-endpoint that forgot the check.
+Ownership — the "may this user touch *this* row" question that a permission model does not answer —
+gets one helper, `auth.RequireOwnership(r, ownerProfileID)`, used by every mutating handler. The
+owner is read from the request context and never from the body, which is what makes the check
+unspoofable by a form field that says otherwise. Per-handler ad hoc ownership comparisons are how
+such applications end up with exactly one endpoint that forgot the check.
 
 ### 7.4 Denials
 
-Denials are content-negotiated and status-correct: 401 when no user is present, 403 when a user
-lacks the grant. If the request prefers `application/json`, the body is
-`{"error": "permission denied", "required": "TASKS:ADMIN"}`; otherwise the unauthorized template
-renders with the required permission named. Returning an HTML page or a 200 to an API caller
-produces a client that believes a rejected write succeeded.
+The auth package classifies a refusal — no identity, forbidden, CSRF — into a `Denial` carrying
+the kind and the permission that was required, and hands it to a `DenialHandler`. `webapp` installs
+its own at `InstallAuth` time, so denials are content-negotiated and status-correct: 401 when no
+user is present, 403 when a user lacks the grant. If the request prefers `application/json`, the
+body is `{"error": "permission denied", "required": "TASKS:ADMIN"}`; otherwise the unauthorized
+template renders with the required permission named. A 401 carries `WWW-Authenticate`. Returning an
+HTML page or a 200 to an API caller produces a client that believes a rejected write succeeded, and
+an auth package that decided the response format could not be tested without a render funnel.
+
+Applications without an installed service deny with 500 rather than passing through: a gate
+configured on an application that has no identity behind it is a configuration bug, and "protected
+routes are quietly open depending on which call site forgot what" is the wrong direction for that
+to fail in.
 
 ### 7.5 Profiles
 
@@ -369,45 +440,59 @@ means there is no registration flow to write: the first request provisions the r
 
 ### 7.6 Database-backed accounts
 
-`auth.NewDBBackend(d, "myapp")` provides an `Authenticator` and `TokenAuthenticator` over a local
-`User` table: bcrypt-hashed secrets, created and reset by an administrator, plus opaque API
-tokens that are stored only as SHA-256 digests with a short display prefix and shown once at
-creation. Applications get real accounts without a password file, while file- and
-directory-based backends remain selectable by an environment variable.
-
-The backend lives in `webapp/auth`, not in authware, because of one signature. authware resolves
-mechanisms through `Factory func() (Authenticator, error)`, which takes no arguments and therefore
-cannot be handed a database handle. Registration is by name and first-one-wins, so the framework
-registers a closure that has already captured it:
+`auth.New(d, opts...)` builds a service over the application's database with a working account
+store: bcrypt-hashed passwords, group membership, opaque API tokens stored only as digests, and
+the profile row above. An application gets real accounts without a password file, and swaps in
+another backend by supplying a mechanism:
 
 ```go
-authware.RegisterFactory("database", func() (authware.Authenticator, error) {
-    return newDBAuthenticator(handle), nil
-})
-authware.RegisterTokenFactory("database", func() (authware.TokenAuthenticator, error) {
-    return newDBTokenAuthenticator(handle), nil
-})
+svc, err := auth.New(d, auth.WithMechanism(ldapMechanism{})) // database stays as fallback
+svc, err := auth.New(d, auth.WithOnlyMechanisms(ldapMechanism{})) // or drop local accounts
 ```
 
-Making the closure capture the handle is the right shape rather than a workaround, with one
-condition worth stating: the handle must exist before mechanisms are registered, which is exactly
-the order `webapp.New` already guarantees, since the database opens before anything that could
-serve a request. The alternative considered was widening authware's `Factory` to accept a
-context, which would push a dependency-carrying bag through the one interface that keeps the
-backends independent of each other.
+`WithMechanism` appends, leaving the database backend in the chain so a local administrator can
+still get in when a directory is down — which is precisely when an emergency account matters.
+`WithOnlyMechanisms` replaces it, for deployments where a local table is a liability rather than a
+fallback. A mechanism is three methods — `Verify`, `Groups`, `Name` — with token resolution and
+password upgrades as optional interfaces, so an LDAP directory that cannot write passwords declares
+fewer capabilities rather than stubbing out ones it cannot honor.
 
-Registration being idempotent and first-wins means a second registration silently does nothing
-rather than failing. That is acceptable here and only here: the framework registers once, during
-construction, and an application that wants a different backend configures one rather than racing
-the framework for the name.
+Mechanisms are constructor arguments, not names in a global registry. The alternative — a package
+`Factory func() (Authenticator, error)` keyed by name, selected by an environment variable — has
+one fatal signature: it takes no arguments, so it cannot be handed a database handle, and the only
+ways out are a captured closure, an ambient global, or widening the signature into a
+dependency-carrying bag. Passing the handle to the constructor makes the requirement visible in the
+type, gives a service exactly the mechanisms it was told to have, and removes both the
+first-registration-wins race and the configuration variable that names a backend nobody registered.
+An operator still chooses the backend; it is the application's `main` that reads the variable and
+passes the mechanism.
+
+Login is a handler rather than a flow to write: `svc.LoginHandler(opts)` parses the form, calls
+`Authenticate`, issues the session, and redirects with 303 so a refresh cannot resubmit. Failures
+are indistinguishable by construction — identical status, identical body, no cookie — with the
+mechanism-specific reasons going to a debug log line; `errors.Is` on the returned sentinel works
+because every failure path returns that one value. `auth.SafeNext` resolves the redirect target
+and refuses scheme-relative, backslash, encoded, and control-character variants. Logout is POST
+only.
+
+Password handling: bcrypt at cost 12, with input truncated to the 72 bytes bcrypt actually reads so
+that the visible password is the password. A login against an unknown account pays a real hash
+anyway, so a timing difference cannot enumerate who exists. Hashes recorded at an older cost are
+rewritten on successful login, which is the only moment the plaintext exists.
+
+API tokens carry 256 bits of entropy and are stored as SHA-256 digests, not bcrypt hashes: bcrypt's
+cost is a defense against low-entropy input, and paying it on every token-authenticated request
+would only slow the server down. The plaintext is shown once at creation, alongside a short display
+prefix.
 
 Two properties of the upstream session cookie are overridden rather than inherited. It is named
 `session`, and it is set with `HttpOnly` alone: no `Secure`, no `SameSite`. A cookie without
 `SameSite` is sent on cross-site requests in every current browser, which is what a CSRF token is
 there to compensate for, and a cookie without `Secure` crosses plain HTTP. The framework reissues
-the cookie with `Secure` (unless `Debug`), `SameSite=Strict`, and a name carrying the application
+the cookie with `Secure` (unless `Debug`), `SameSite=Lax`, and a name carrying the application
 prefix, so the hardening is a property of the framework rather than of whichever backend happened
 to be selected.
+
 
 
 ## 8. Routing, middleware, and errors (`webapp`)
@@ -450,8 +535,14 @@ Installed in order, outermost first, each individually replaceable:
 
 ```
 tracker → RequestID → client IP → Recoverer → slog request logger → body limit
-→ Compress → Heartbeat("/-/alive") → SecureHeaders → CSRF → OptionalAuth → Profile
+→ Compress → Heartbeat("/-/alive") → SecureHeaders → ResolveIdentity → CSRF → Profile → router
 ```
+
+The identity resolver runs before the CSRF check, so a token can be bound to the identity this
+request was authenticated as rather than resolving the credential a second time, and the profile
+middleware runs last because provisioning a row needs the identity the first one established. All
+three are spliced in by `InstallAuth`, between the security headers and the router, which is the
+only position where a denial still gets hardened headers and a route guard can read an identity.
 
 The tracker goes outside everything, including `RequestID`, because the error path needs to know
 whether a response had already begun, and a writer installed partway down the chain is invisible
@@ -643,10 +734,17 @@ TASKS_DB              sqlite path                     <app>.db
 TASKS_DB_DSN          postgres DSN                    required for postgres
 TASKS_COOKIE_SECURE   Secure cookie attribute         true unless TASKS_DEBUG
 TASKS_MODULES         enabled optional modules        all
-AUTHWARE_BASIC_MECHS  auth mechanism chain            htpasswd
 AUTHWARE_SESSION_KEY  session signing key             required in production
 AUTHWARE_SESSION_LIFETIME session lifetime            1h
 ```
+
+The two `AUTHWARE_` variables are deliberately outside the application prefix and are the same
+for every application on a host, because they are the credential the session cookie format is
+defined against: one key in the environment is much better than two that somebody has to keep
+equal, and a prefix on a signing key would make a rolling deploy invalidate sessions that the new
+process can still read. `AUTHWARE_SESSION_KEY` is the root authority for identity — anyone holding
+it can mint a session for any identity with any groups — so a production boot that has to
+manufacture one fails.
 
 `Config.Validate()` runs inside `New()` and returns an aggregate error. Constructors never call
 `os.Exit`: an application that cannot be configured should return the error to `main`, which
@@ -680,7 +778,11 @@ a documented recommendation.
 | No request logging or correlation IDs | `RequestID` plus a slog request logger |
 | No `http.Server` timeouts | `WithTimeouts` with non-zero defaults |
 | SQLite without WAL, busy timeout, or foreign keys | DSN pragmas applied unconditionally |
-| Authorization checks copy-pasted per handler, one of them missing | guards, `RequireOwnership`, boot-time permission installation |
+| Authorization checks copy-pasted per handler, one of them missing | guards applied at route registration, `RequireOwnership`, identity read only from the context |
+| Session and CSRF signing keys the same bytes, so a signature obtainable for one purpose serves the other | CSRF key derived from the session key by HMAC with a domain-separating label, never the key itself |
+| Logout reachable by `GET`, triggerable by an `<img>` tag | logout and login handlers are POST-only, answering 405 with `Allow` |
+| Login failures that disclose whether an account exists, by message or by timing | one sentinel error on every failure path, identical response body, a real bcrypt round for unknown accounts |
+| A session identity taken from a body or query field, so "whose row is this" is whoever posted said | identity and profile ID come from the request context; `RequireOwnership` reads only there |
 | Global filter registries mutated from constructors, racing at boot | framework-owned pure filters registered in `init()` |
 | Module factories swallowing errors into typed-nil interfaces | `Factory` must return an error; startup aborts |
 | `os.Exit` called from constructors; dropped context cancel functions | errors returned; `Run()` owns the lifecycle |
@@ -698,12 +800,12 @@ PostgreSQL when `APP_TEST_PG_DSN` is set, which is how foreign-key ordering and 
 differences get caught), compiled templates, and an `http.Client` wired directly to the handler —
 no listener, no ports, no sleeps.
 
-`testas.As(t, "alice", "admins")` injects an authware user into the request context, so
-authorization is tested without a login round trip. The framework's own test suite asserts the
-security-relevant invariants explicitly: 401 versus 403 on denials, JSON versus HTML negotiation,
-CSRF rejection of unsafe methods, escaped rendering of error payloads (a `<script>` in an error
-must never round-trip), migration idempotency across two boots of the same database, and the
-required-template compile check.
+`testas.As(t, "alice", "admins")` injects a user into the request context, so authorization is
+tested without a login round trip. The framework's own test suite asserts the security-relevant
+invariants explicitly: 401 versus 403 on denials, JSON versus HTML negotiation, CSRF rejection of
+unsafe methods, a token that survives a real cookie round trip, login failures that are byte-for-byte
+identical, escaped rendering of error payloads (a `<script>` in an error must never round-trip),
+migration idempotency across two boots of the same database, and the required-template compile check.
 
 The example application in `examples/tasks` is the integration test: authentication, ownership,
 permissions, pagination, form validation, theming, and both database drivers.
@@ -714,8 +816,10 @@ permissions, pagination, form validation, theming, and both database drivers.
 and helpers. `webapp.New` with config, options, the middleware stack, the render funnel, typed
 input handling, pagination, and `Run`. Bare `View` over an embedded FS.
 
-**M2 — auth.** authware wiring, hardened sessions, session key policy, CSRF, permissions,
-denial negotiation, profile middleware, database-backed backend.
+**M2 — auth.** Service over the database with a pluggable mechanism chain, hardened stateless
+sessions, session key policy, CSRF bound to the identity, permissions and guards, denial
+negotiation delegated to the core, profile middleware, database-backed accounts and API tokens,
+login and logout handlers.
 
 **M3 — templating.** Namespaced loader, core UI, startup compile check, debug mode, filters,
 `Share`, navigation.
@@ -750,7 +854,7 @@ Closed since the design was written:
 - ~~Whether to build a struct-tag form binder.~~ No. See §10: the argument was legibility of
   authorization-relevant fields, not dependency cost, and it holds. The helpers that replaced it
   are in the core and cover path parameters, query values, dates, paging, and form fields.
-- ~~How a database-backed authware backend gets a handle through an argument-less `Factory`.~~
-  A registered closure captures it, and construction order guarantees the handle exists first.
-  See §7.6.
+- ~~How a database-backed backend gets a handle through an argument-less mechanism factory.~~ It
+  does not use a factory: the service is constructed with the handle, and the mechanism chain
+  replaced the registry indirection that had the problem. See §7.6.
 
