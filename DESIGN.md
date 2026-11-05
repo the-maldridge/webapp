@@ -80,12 +80,16 @@ webapp/db/         driver selection, pooling, pragmas, AutoMigrate + versioned m
 webapp/auth/       service, mechanism chain, hardened cookies, CSRF, permissions, guards, login handlers
 webapp/tmpl/       namespaced multi-loader, shared context, error adaptation, filters
 webapp/ui/         embedded core UI: base and login templates, error pages, nav fragment, static assets
+webapp/webapptest/ test applications: disposable database, real auth, handler-driven client
+webapp/testas/     identity stamped onto a request, for handlers tested alone
 examples/tasks/    a complete application built on the framework
 ```
 
 Dependency direction is strictly inward: `webapp` may import `db`, `auth`, `tmpl`, and `ui`;
 none of those import `webapp`. Applications import `webapp` plus whichever of the subpackages
-they need directly.
+they need directly. `webapptest` and `testas` are the leaves: they import `webapp` and nothing
+imports them, which is what lets a test helper reach an installed service without the framework
+knowing tests exist.
 
 ## 4. Application surface
 
@@ -94,6 +98,7 @@ func main() {
     a, err := webapp.New(
         webapp.WithEnvPrefix("TASKS"),
         webapp.WithDBOptions(db.WithAutoMigrate(Task{})),
+        webapp.WithTemplates("tasks", templateFS), // //go:embed p2
     )
     if err != nil {
         return err
@@ -101,16 +106,19 @@ func main() {
     defer a.Close()
 
     // Authentication needs the database, which does not exist until New has
-    // opened it, so it is installed rather than configured.
+    // opened it, so it is installed rather than configured. Registering the
+    // service as a component is what puts its tables in the schema.
     svc, err := auth.New(a.DB)
     if err != nil {
+        return err
+    }
+    if err := a.RegisterComponent(svc); err != nil {
         return err
     }
     if err := a.InstallAuth(svc); err != nil {
         return err
     }
 
-    a.RegisterTemplates("tasks", templateFS) // //go:embed p2
     a.Nav(webapp.NavItem{Weight: 80, Label: "Tasks", Href: "/ui/task/"})
 
     a.Route("/ui/task", func(r webapp.Router) {
@@ -984,17 +992,26 @@ a documented recommendation.
 
 ## 13. Testing
 
-`webapp.NewTestApp(t, opts...)` returns an application with a temp-directory SQLite database (or
-PostgreSQL when `APP_TEST_PG_DSN` is set, which is how foreign-key ordering and dialect
-differences get caught), compiled templates, and an `http.Client` wired directly to the handler —
-no listener, no ports, no sleeps.
+`webapptest.NewApp(t, opts...)` returns an application with a temp-directory SQLite database (or
+PostgreSQL when `WEBAPPTEST_PG_DSN` is set, which is how foreign-key ordering and dialect
+differences get caught), migrated templates, and an `http.Client` wired directly to the handler —
+no listener, no ports, no sleeps. Cookies are kept across requests and redirects are not followed,
+so a 303 stays under test instead of silently becoming a test of the page it landed on.
 
-`testas.As(t, "alice", "admins")` injects a user into the request context, so authorization is
-tested without a login round trip. The framework's own test suite asserts the security-relevant
-invariants explicitly: 401 versus 403 on denials, JSON versus HTML negotiation, CSRF rejection of
-unsafe methods, a token that survives a real cookie round trip, login failures that are byte-for-byte
-identical, escaped rendering of error payloads (a `<script>` in an error must never round-trip),
-migration idempotency across two boots of the same database, and the required-template compile check.
+Authentication is opt-in: `InstallAuth` builds a service over the application's own database with a
+test session key, and `Account` and `SignIn` produce a working account and a real session cookie,
+so an authorization test exercises the same middleware a browser does.
+
+`testas.As(req, "alice", "admins")` stamps an identity into a request context instead, for a handler
+or a template tested on its own. It is not a session and does not satisfy a route guard, which is
+the distinction the two helpers exist to draw: an identity that passes a guard because a test helper
+imported the right package is a test that cannot fail.
+
+The framework's own test suite asserts the security-relevant invariants explicitly: 401 versus 403
+on denials, JSON versus HTML negotiation, CSRF rejection of unsafe methods, a token that survives a
+real cookie round trip, login failures that are byte-for-byte identical, escaped rendering of error
+payloads (a `<script>` in an error must never round-trip), migration idempotency across two boots of
+the same database, and the required-template compile check.
 
 The example application in `examples/tasks` is the integration test: authentication, ownership,
 permissions, pagination, form validation, theming, and both database drivers.
@@ -1016,7 +1033,8 @@ login and logout handlers.
 **M4 — modules and polish.** Registry, scopes, capability interfaces, static asset namespacing,
 `NewTestApp`/`testas`, example application, package documentation. Built: the registry
 (`Register`/`WithModule`), scope selection, the four capability interfaces, per-module template and
-asset namespaces with `ETag`s (§9). Remaining: the test helpers and the example application.
+asset namespaces with `ETag`s (§9), and `webapptest`/`testas`. Remaining: the example application
+and the package documentation pass.
 
 M4 was originally "forms": binding, validation, re-render helpers, typed parameters, pagination.
 Typed parameters, pagination, and the re-render contract turned out to belong to the request spine
