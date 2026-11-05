@@ -166,21 +166,91 @@ func (a *App) renderWithStatus(w http.ResponseWriter, r *http.Request, status in
 		return
 	}
 
-	body := w.Header()
-	body.Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(status)
+	gate := &renderGate{w: w, status: status}
+	gate.Header().Set("Content-Type", "text/html; charset=utf-8")
+	err := a.Renderer.Render(r.Context(), gate, name, data)
 
-	if err := a.Renderer.Render(r.Context(), w, name, data); err != nil {
-		// Headers are already out, so the status cannot change. Log the
-		// real cause and stop; whatever partial bytes reached the client
-		// are the client's problem, and a template error is never
-		// rendered into the page.
+	if err != nil && !gate.committed {
+		// Nothing reached the client, so the status is still the
+		// application's to choose and an honest page can replace the one
+		// that failed. This is the common case: a renderer that cannot
+		// render writes nothing, which is why the interface requires it.
+		//
+		// A render failure is a server fault, but a rejection that could
+		// not be re-rendered was already refused on its own merits, and the
+		// client's mistake should not become the server's.
+		if status < 400 {
+			status = http.StatusInternalServerError
+		}
+		a.Fail(w, r, status, fmt.Errorf("cannot render %q: %w", name, err))
+		return
+	}
+
+	gate.commit()
+
+	if err != nil {
+		// A renderer wrote bytes and then failed, so the response is
+		// already committed and the status cannot change. Log the real
+		// cause and stop; a template error is never rendered into the page.
 		a.log().ErrorContext(r.Context(), "template execution failed",
 			"request_id", a.requestID(r),
 			"template", name,
 			"error", err,
 		)
 	}
+}
+
+// renderGate holds a response's status until the renderer produces a body.
+//
+// Writing the status before the body is the obvious order and it is the wrong
+// one: a render that then fails — a missing template, a broken include — has
+// already promised the client 200, and no error page can follow a status that
+// says nothing is wrong. That is the difference between a blank white page and
+// an explanation with a correlation ID, and it is the difference between a
+// monitoring system that sees a healthy server and one that does not.
+//
+// Deferring costs one method call and nothing else. A renderer that writes,
+// as a conforming one does not, still gets its bytes to the client with the
+// chosen status, exactly as before.
+type renderGate struct {
+	w      http.ResponseWriter
+	status int
+
+	// committed records that the response has begun, which is the moment
+	// after which no honest error response is possible.
+	committed bool
+}
+
+// Header returns the underlying response headers. They are shared rather than
+// buffered, so a renderer that sets a cookie or a custom header has it applied
+// when the status is finally written.
+func (g *renderGate) Header() http.Header { return g.w.Header() }
+
+// Write emits the status if this is the first write, then b.
+func (g *renderGate) Write(b []byte) (int, error) {
+	g.commit()
+	return g.w.Write(b)
+}
+
+// WriteHeader keeps the funnel's status rather than the renderer's. The status
+// is decided by the responder, which knows whether this render is a page, a
+// rejection being re-rendered, or an error; a template that could restamp it
+// here could answer a refusal with 200.
+func (g *renderGate) WriteHeader(int) {}
+
+// commit writes the status and the default content type, once. It is safe to
+// call it whether or not a write already did.
+func (g *renderGate) commit() {
+	if g.committed {
+		return
+	}
+	g.committed = true
+
+	header := g.w.Header()
+	if header.Get("Content-Type") == "" {
+		header.Set("Content-Type", "text/html; charset=utf-8")
+	}
+	g.w.WriteHeader(g.status)
 }
 
 // Fail is the single error exit. It always sets an accurate status code,
