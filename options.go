@@ -220,3 +220,46 @@ func WithModules(names ...string) Option {
 		return nil
 	}
 }
+
+// WithDeploymentScope declares which role this process serves, such as "web"
+// or "worker". A module whose Scopes list is non-empty and does not name it is
+// not loaded.
+//
+// It exists for one binary running several ways, which is otherwise expressed
+// by build tags nobody outside the release engineer can reproduce, or by
+// loading everything and hoping a worker does not serve a page.
+func WithDeploymentScope(scope string) Option {
+	return func(c *Config) error {
+		scope = strings.ToLower(strings.TrimSpace(scope))
+		if scope == "" {
+			return errors.New("WithDeploymentScope: scope may not be empty")
+		}
+		c.DeploymentScope = scope
+		return nil
+	}
+}
+
+// WithModule supplies a module to this application without adding it to the
+// process-global registry that webapp.Register writes to.
+//
+// It is the form to prefer when a module's enablement is a decision this
+// main() makes rather than a deployment making of a linked-in list: nothing is
+// visible to any other application in the process, and a defective description
+// is an error from New rather than a panic during package initialisation.
+func WithModule(modules ...ModuleInfo) Option {
+	return func(c *Config) error {
+		for _, m := range modules {
+			info, err := validateModuleInfo(m)
+			if err != nil {
+				return fmt.Errorf("WithModule: %w", err)
+			}
+			for _, existing := range c.Modules {
+				if existing.Name == info.Name {
+					return fmt.Errorf("WithModule: module %q is supplied twice", info.Name)
+				}
+			}
+			c.Modules = append(c.Modules, info)
+		}
+		return nil
+	}
+}

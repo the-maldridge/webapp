@@ -60,6 +60,13 @@ type App struct {
 	// requests are in flight is not supported.
 	registry *tmpl.Registry
 
+	// modules describes what the module registry resolved and loaded.
+	modules *moduleState
+
+	// moduleStatics are the asset trees modules contributed, mounted once a
+	// router exists to mount them on.
+	moduleStatics []moduleStatic
+
 	// injections are internal context contributors, used by the
 	// authentication and templating layers to add user, CSRF, and
 	// navigation values without the core depending on them.
@@ -167,6 +174,19 @@ func New(opts ...Option) (*App, error) {
 	}
 
 	a.installStack()
+
+	// Modules are installed after the router exists, because registering
+	// routes is one of the things they do, and before templating, because a
+	// module's templates have to be mounted before the renderer is built.
+	if err := a.installModules(); err != nil {
+		handle.Close()
+		return nil, err
+	}
+
+	// Static assets are mounted before templating is considered, because an
+	// API-only application with templating switched off still has a stylesheet
+	// to serve if anything links it.
+	a.installStatic()
 
 	// Templating is installed last so that an application's routes, which may
 	// be registered by components, are already described by the time a render

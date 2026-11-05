@@ -21,6 +21,7 @@ const (
 	suffixProduction   = "_PRODUCTION"
 	suffixCookieSecure = "_COOKIE_SECURE"
 	suffixModules      = "_MODULES"
+	suffixScope        = "_SCOPE"
 	suffixReadTimeout  = "_READ_TIMEOUT"
 	suffixWriteTimeout = "_WRITE_TIMEOUT"
 	suffixIdleTimeout  = "_IDLE_TIMEOUT"
@@ -119,7 +120,16 @@ type Config struct {
 
 	// EnabledModules restricts the optional modules that are loaded.
 	// Empty means every module the application registered.
+	//
+	// It is a whitelist rather than a blocklist because a deployment that
+	// disables one feature and silently keeps everything else linked in is a
+	// deployment whose attack surface nobody enumerated.
 	EnabledModules []string
+
+	// DeploymentScope names the role this process serves, such as "web" or
+	// "worker". A module whose Scopes list does not include it is not loaded.
+	// Empty loads every module regardless of scope.
+	DeploymentScope string
 
 	// Timeouts are the http.Server deadlines.
 	Timeouts Timeouts
@@ -155,6 +165,11 @@ type Config struct {
 	// Components contribute database models and migrations. Plain model
 	// values may be used instead of implementing Component.
 	Components []any
+
+	// Modules the application supplied directly rather than through
+	// webapp.Register. They are resolved together with the global registry,
+	// and a name claimed in both is an error.
+	Modules []ModuleInfo
 
 	// SiteTitle is the name the framework's own pages give the application.
 	// Empty means the environment prefix, which is a reasonable string and
@@ -273,6 +288,9 @@ func (c *Config) applyEnv() error {
 	}
 	if v, ok := c.lookup(suffixModules); ok && len(c.EnabledModules) == 0 {
 		c.EnabledModules = splitList(v)
+	}
+	if v, ok := c.lookup(suffixScope); ok && c.DeploymentScope == "" {
+		c.DeploymentScope = strings.TrimSpace(v)
 	}
 	if v, ok := c.lookup(suffixClientIPHeader); ok && c.ClientIPHeader == "" {
 		c.ClientIPHeader = strings.TrimSpace(v)

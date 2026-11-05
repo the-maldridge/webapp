@@ -184,7 +184,6 @@ func (a *App) installTemplates() error {
 
 	a.Renderer = &templateRenderer{inner: render}
 	a.SetErrorPage(a.renderErrorPage)
-	a.installStatic()
 
 	a.log().Debug("webapp: templating installed",
 		"namespaces", strings.Join(reg.Namespaces(), ","),
@@ -301,63 +300,6 @@ func requiredPerm(err error) string {
 		return ""
 	}
 	return denial.perm.String()
-}
-
-// installStatic serves the framework's own assets.
-//
-// Application assets arrive through the module registry, which gives each one a
-// namespace that becomes a URL prefix so two modules cannot ship different
-// files at the same address; until that exists the core only has to serve what
-// its own base layout links, or every page it renders starts with a broken
-// stylesheet.
-func (a *App) installStatic() {
-	a.Mount(StaticRoot, staticHandler(StaticRoot, ui.Static()))
-}
-
-// StaticRoot is the URL prefix the framework's static assets are served from.
-// The framework's own files sit below it under css/, leaving the top of the
-// namespace free for applications.
-const StaticRoot = "/static/core"
-
-// staticHandler serves an embedded asset tree mounted at prefix.
-//
-// The prefix is stripped before the filesystem is consulted, which is not
-// decoration: a mounted chi route passes the whole request path down to the
-// handler, so without the strip the file server looks for
-// "static/core/css/app.css" inside a tree whose root is already below that
-// prefix, and every framework asset answers 404 while the router reports the
-// route as registered.
-//
-// The cache header is set here rather than left to http.FileServer because an
-// embedded file has no modification time, so the file server has no validator to
-// offer and will not produce one; the expiry below is a deliberate, modest
-// number rather than an accident of the transport.
-func staticHandler(prefix string, tree fs.FS) http.Handler {
-	files := http.FileServer(http.FS(tree))
-	stripped := http.StripPrefix(strings.TrimSuffix(prefix, "/"), files)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "public, max-age=3600")
-		w.Header().Set("Vary", "Accept-Encoding")
-		stripped.ServeHTTP(w, r)
-	})
-}
-
-// Asset returns the URL for a static asset, stamped with the build version so a
-// browser that cached the file from the previous deploy asks for the new one.
-//
-// The stamp is a query parameter rather than a filename rewrite because the
-// assets are embedded: there is no build step in which a file named
-// app.a4f3c1.css could be produced, and a cache-busting scheme that needs one is
-// broken the first time somebody runs the binary directly.
-func (a *App) Asset(name string) string {
-	url := StaticRoot + "/" + strings.TrimPrefix(name, "/")
-	if a.buildVersion == "" {
-		return url
-	}
-	if strings.Contains(url, "?") {
-		return url + "&v=" + a.buildVersion
-	}
-	return url + "?v=" + a.buildVersion
 }
 
 // siteTitle is the name templates give the application.
