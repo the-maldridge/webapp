@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -620,6 +621,44 @@ func TestModuleCapabilitiesAreApplied(t *testing.T) {
 	}
 	if owner, ok := a.ModuleOwner(auth.P("probe", "admin")); ok {
 		t.Errorf("an undeclared permission has an owner: %q", owner)
+	}
+}
+
+// guardedProbeModule registers gated routes, which is the case a guard that
+// resolved the auth service when it was built gets wrong: modules register
+// during construction, authentication is installed after it.
+type guardedProbeModule struct{}
+
+func (guardedProbeModule) Routes(r Router) {
+	r.Get("/guarded-module", r.Guard(auth.P("guarded", "view"), okHandler))
+	r.Get("/login-module", r.RequireLogin(okHandler))
+}
+
+func TestModuleGuardedRoutesSeeTheLaterInstall(t *testing.T) {
+	withCleanModuleRegistry(t)
+
+	registerModule(t, ModuleInfo{
+		Name:        "guarded",
+		Factory:     func(s *Scope) (any, error) { return guardedProbeModule{}, nil },
+		Permissions: []auth.Perm{auth.P("guarded", "view")},
+	})
+
+	a := newTestApp(t)
+	svc := newCoreAuthService(t)
+	installAuth(t, a, svc)
+
+	if rec := a.get(t, "/guarded-module"); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous module route = %d, want 401", rec.Code)
+	}
+	holder := withCookie(httptest.NewRequest(http.MethodGet, "/guarded-module", nil),
+		sessionCookieFor(t, svc, "ada", "GUARDED:VIEW"))
+	if rec := a.send(t, holder); rec.Code != http.StatusOK {
+		t.Fatalf("holder of the module's own permission = %d, want 200", rec.Code)
+	}
+	anyone := withCookie(httptest.NewRequest(http.MethodGet, "/login-module", nil),
+		sessionCookieFor(t, svc, "ada"))
+	if rec := a.send(t, anyone); rec.Code != http.StatusOK {
+		t.Fatalf("login-gated module route = %d, want 200", rec.Code)
 	}
 }
 

@@ -142,11 +142,24 @@ func (a *App) RequireLogin() func(http.Handler) http.Handler {
 }
 
 // Guard returns middleware that enforces a permission.
+//
+// The service is resolved when a request arrives, not when the guard is built.
+// Authentication is installed after construction, because a service needs a
+// database handle and the handle does not exist until New has opened one, so a
+// guard that captured the service at registration would capture its absence for
+// every route registered during construction, which is every route a module
+// registers, and answer 500 forever on an application that has one.
 func (a *App) Guard(p auth.Perm) func(http.Handler) http.Handler {
-	if a.auth == nil {
-		return denyEverything
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			svc := a.AuthService()
+			if svc == nil {
+				denyConfiguration(w, r)
+				return
+			}
+			svc.Require(p)(next).ServeHTTP(w, r)
+		})
 	}
-	return a.auth.Require(p)
 }
 
 // Guarded applies the application's permission check to a single handler and
@@ -161,14 +174,12 @@ func (a *App) Guarded(p auth.Perm, h http.HandlerFunc) http.HandlerFunc {
 // whether it needs an identity.
 func (a *App) Public(h http.HandlerFunc) http.HandlerFunc { return h }
 
-// denyEverything is the gate when no service is installed: a 500 rather than a
-// pass. The status is a server error because that is what it is — the
+// denyConfiguration is the gate when no service is installed: a 500 rather than
+// a pass. The status is a server error because that is what it is — the
 // application is misconfigured — and the alternative is protected routes that
 // are quietly open depending on which call site forgot what.
-func denyEverything(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-	})
+func denyConfiguration(w http.ResponseWriter, r *http.Request) {
+	http.Error(w, "internal error", http.StatusInternalServerError)
 }
 
 // permDenial is a refusal that names the permission it needed.

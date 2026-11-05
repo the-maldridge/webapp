@@ -231,6 +231,41 @@ func TestRequireLoginWithoutServiceDenies(t *testing.T) {
 	}
 }
 
+// TestGuardRegisteredBeforeInstallAuthWorks is the ordering regression.
+//
+// Authentication can only be installed after construction, because a Service
+// needs a database handle, and a module's routes are registered during
+// construction. So a guard that resolved the service when it was built would
+// resolve its absence, and every guarded module route would answer 500 on an
+// application that installed authentication perfectly well.
+func TestGuardRegisteredBeforeInstallAuthWorks(t *testing.T) {
+	a := newTestApp(t)
+
+	a.Route("/early", func(r Router) {
+		r.Get("/login", r.RequireLogin(okHandler))
+		r.Get("/perm", r.Guard(auth.P("tasks", "edit"), okHandler))
+	})
+
+	// Before installation the gate is a configuration bug, and that is still
+	// the answer: nothing about installing later makes the anonymous case work.
+	if rec := a.get(t, "/early/login"); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("unguarded-by-config status = %d, want 500", rec.Code)
+	}
+
+	svc := newCoreAuthService(t)
+	installAuth(t, a, svc)
+
+	if rec := a.get(t, "/early/login"); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous status = %d, want 401 once a service is installed", rec.Code)
+	}
+
+	holder := withCookie(httptest.NewRequest(http.MethodGet, "/early/perm", nil),
+		sessionCookieFor(t, svc, "ada", "TASKS:EDIT"))
+	if rec := a.send(t, holder); rec.Code != http.StatusOK {
+		t.Fatalf("guarded route registered before InstallAuth = %d, want 200", rec.Code)
+	}
+}
+
 func TestGuardedRouteRefusesAnonymous(t *testing.T) {
 	a := newTestApp(t)
 	svc := newCoreAuthService(t)
