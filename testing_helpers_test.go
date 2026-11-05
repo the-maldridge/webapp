@@ -15,10 +15,12 @@ import (
 	"github.com/the-maldridge/webapp/db"
 )
 
-// newTestApp builds an application backed by a temporary SQLite database
-// with no routes registered. Tests add routes and drive a.Handler through
-// httptest, so no port, no listener, and no sleeps are involved.
-func newTestApp(t *testing.T, opts ...Option) *App {
+// baseTestOptions is the configuration every test application shares: a
+// temporary database, a discard logger, an address nobody binds. It is a
+// function rather than a literal in each helper so that a test constructing an
+// application that is expected to fail still cannot leave a database file
+// behind it in the source tree.
+func baseTestOptions(t *testing.T, opts ...Option) []Option {
 	t.Helper()
 
 	base := []Option{
@@ -30,8 +32,16 @@ func newTestApp(t *testing.T, opts ...Option) *App {
 			db.WithoutMigrations(),
 		),
 	}
+	return append(base, opts...)
+}
 
-	a, err := New(append(base, opts...)...)
+// newTestApp builds an application backed by a temporary SQLite database
+// with no routes registered. Tests add routes and drive a.Handler through
+// httptest, so no port, no listener, and no sleeps are involved.
+func newTestApp(t *testing.T, opts ...Option) *App {
+	t.Helper()
+
+	a, err := New(baseTestOptions(t, opts...)...)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

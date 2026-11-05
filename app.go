@@ -21,6 +21,7 @@ import (
 
 	"github.com/the-maldridge/webapp/auth"
 	"github.com/the-maldridge/webapp/db"
+	"github.com/the-maldridge/webapp/tmpl"
 )
 
 // App is a configured application: a database handle, a router with the
@@ -48,6 +49,16 @@ type App struct {
 
 	// shared are per-render providers added with Share.
 	shared map[string]Provider
+
+	// navItems are the navigation entries registered by the application and
+	// its modules, filtered per request by permission.
+	navItems []NavItem
+
+	// registry is the mounted template roots. It is kept so that a module
+	// installed between construction and the first request can add its own;
+	// compilation is lazy, so nothing else has to be rebuilt. Mounting while
+	// requests are in flight is not supported.
+	registry *tmpl.Registry
 
 	// injections are internal context contributors, used by the
 	// authentication and templating layers to add user, CSRF, and
@@ -156,6 +167,17 @@ func New(opts ...Option) (*App, error) {
 	}
 
 	a.installStack()
+
+	// Templating is installed last so that an application's routes, which may
+	// be registered by components, are already described by the time a render
+	// is possible. It is part of construction rather than an opt-in step
+	// because the error page depends on it: an application that forgot to wire
+	// templating would still start, and would discover the omission on the first
+	// request that failed for a different reason.
+	if err := a.installTemplates(); err != nil {
+		handle.Close()
+		return nil, err
+	}
 	return a, nil
 }
 

@@ -99,9 +99,10 @@ func (a *App) InstallAuth(svc *auth.Service) error {
 			ctx["isAuthenticated"] = true
 		}
 
-		// The markup is escaped inside auth and wrapped here, once, so that
-		// templates can write {{ csrfInput }} without a |safe filter and
-		// without any possibility of a token carrying markup.
+		// The markup is escaped inside auth and wrapped here, once. The renderer
+		// recognises template.HTML at the context boundary and marks the value
+		// safe, so templates write {{ csrfInput }} with no |safe filter and no
+		// possibility of a token carrying markup.
 		ctx["csrfInput"] = template.HTML(auth.CSRFInput(r))
 		ctx["csrfToken"] = auth.CSRF(r)
 	})
@@ -170,6 +171,19 @@ func denyEverything(next http.Handler) http.Handler {
 	})
 }
 
+// permDenial is a refusal that names the permission it needed.
+//
+// It is a type rather than a sentence in an error because the error page has to
+// state the grant, and reading one back out of formatted text means the page
+// breaks the moment the wording does. Wrapping costs nothing and makes the
+// permission available to whoever renders it.
+type permDenial struct {
+	msg  string
+	perm auth.Perm
+}
+
+func (e *permDenial) Error() string { return e.msg }
+
 // renderDenial answers a refusal produced by the auth package.
 //
 // Content negotiation is the core's job: an API caller that receives an HTML
@@ -206,12 +220,12 @@ func (a *App) renderDenial(w http.ResponseWriter, r *http.Request, d auth.Denial
 		return
 	}
 
-	// The page path names the required permission in the error it passes down,
-	// deliberately: telling a signed-in user which grant they need is
-	// support-free, and the identity asking already knows it is asking.
+	// The page names the required permission deliberately: telling a signed-in
+	// user which grant they need is support-free, and the identity asking
+	// already knows it is asking.
 	err := errors.New(d.Error())
 	if d.Kind == auth.DenialForbidden && d.Perm.Module != "" {
-		err = fmt.Errorf("%s: requires %s", d.Error(), d.Perm)
+		err = &permDenial{msg: fmt.Sprintf("%s: requires %s", d.Error(), d.Perm), perm: d.Perm}
 	}
 	a.Fail(w, r, status, err)
 }

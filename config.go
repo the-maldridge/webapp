@@ -156,6 +156,22 @@ type Config struct {
 	// values may be used instead of implementing Component.
 	Components []any
 
+	// SiteTitle is the name the framework's own pages give the application.
+	// Empty means the environment prefix, which is a reasonable string and
+	// rarely the one to show a customer.
+	SiteTitle string
+
+	// TemplateDebugDir is a directory of templates mounted ahead of every
+	// embedded root, compiled per request. Empty disables it.
+	TemplateDebugDir string
+
+	// TemplatesDisabled builds the application with no renderer at all.
+	TemplatesDisabled bool
+
+	// templateRoots are the template filesystems an application mounted, in
+	// search order.
+	templateRoots []templateRoot
+
 	// DBOptions are forwarded verbatim to db.New. The application
 	// prefix is prepended so that a prefix set on the application also
 	// names the database variables.
