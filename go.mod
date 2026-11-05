@@ -3,6 +3,7 @@ module github.com/the-maldridge/webapp
 go 1.26.0
 
 require (
+	github.com/flosch/pongo2/v6 v6.1.0
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/meehow/securebytes v0.3.1
 	github.com/the-maldridge/authware v0.1.7-0.20261013191319-d7308a3fecde
@@ -20,6 +21,7 @@ require (
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/mattn/go-sqlite3 v1.14.22 // indirect
+	github.com/rogpeppe/go-internal v1.16.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 )
