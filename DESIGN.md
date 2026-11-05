@@ -179,46 +179,96 @@ A template name is resolved in this order:
 splits the key and opens the underlying `fs.FS`. The canonical key doubles as pongo2's cache
 key, so one physical template is compiled once regardless of which name reached it.
 
-The consequence for applications: `{% extends "base.p2 %}` and
+Two constraints follow from the engine and are the reason for the shape of the API:
+
+- **Exactly one loader.** pongo2 resolves `extends`, `include`, and imports against the first
+  loader in its set and ignores the rest, so mounting one loader per root would make every
+  framework template unresolvable from inside an application template. The registry is one
+  loader implementing the search above, which is also what makes `@ns/...` mandatory for
+  framework files: it is the only form that cannot be answered by a different root. An override
+  is therefore a second copy of a file that wins by mount order, not a fallback to a
+  second root when the first misses.
+- **`Abs` cannot report failure.** A name that resolves nowhere comes back unchanged, which for
+  something plausible-looking like `@ghost/detail.p2` is indistinguishable from a resolved key.
+  Anything that produces an error message or a startup check goes through
+  `Lookup(base, name)`, which re-checks that the namespace is mounted and the file exists.
+
+The consequence for applications: `{% extends "base.p2" %}` and
 `{% include "fragments/nav.p2" %}` just work, at any depth, regardless of which package the
-template was embedded from.
+template was embedded from. Names that climb out of a mounted root are clamped to it, so a
+template cannot reference a file that was never a template.
 
 ### 5.2 Core UI and the compile check
 
-`webapp/ui` ships the base layout, the login page, the error pages, the navigation fragment, and
-the framework stylesheet. At startup the framework compiles the required set and fails if any of
-it is missing or broken:
+`webapp/ui` is its own package because embedding requires a package: the directory some package
+embeds has to be a directory in the source tree, and the alternative is the framework's
+presentation files living inside the application core. It ships the base layout, the login page,
+the navigation fragment, the three error pages, and the framework stylesheet.
+
+`ui.Required` lists the templates the framework renders itself. At startup they are compiled
+through `Renderer.Verify`, and a missing or unparseable entry fails construction:
 
 ```
-base.p2  login.p2  fragments/nav.p2
-errors/internal.p2  errors/unauthorized.p2  errors/notfound.p2
+@core/base.p2  @core/login.p2  @core/fragments/nav.p2
+@core/errors/internal.p2  @core/errors/unauthorized.p2  @core/errors/notfound.p2
 ```
 
-Themes are supported by mounting the theme root *ahead of* core, so a theme only needs to
-provide the templates it actually wants to override, and an incomplete theme is a startup error
-rather than a runtime one.
+They are listed namespace-qualified, and that is load-bearing: a bare `errors/internal.p2`
+resolves to whichever mounted root contains it first, so an application shipping its own copy
+would make the framework's compile check pass while the framework still could not render its own
+failures. An error template is rendered only when something has already gone wrong, which is the
+worst possible moment to discover it is broken and the least likely moment to investigate it.
+
+Themes work by mounting a root *ahead of* core, so a theme provides only the templates it wants
+to override. Because the framework references its own files as `@core/...`, an application can
+replace the login page and cannot replace the framework's error page — a distinction that matters
+because the error page is what runs when the application is the thing that is broken.
 
 ### 5.3 Debug mode
 
-`WithTemplateDebug(dir)` mounts an `os.DirFS` root before the embedded roots and enables
-pongo2's non-caching debug mode, so template edits are visible on the next request. The
-fallback to embedded content means files that exist only in the binary keep rendering, so a
-partially extracted theme remains functional.
+`WithTemplateDebug(dir)` mounts an `os.DirFS` root before every embedded root and turns on
+pongo2's non-caching mode, so an edit is visible on the next request without a rebuild. The two
+effects are one option rather than two settings: an overlay whose edits never appear is an
+overlay the server is ignoring, and an engineer editing a file nothing reads has no reason to
+suspect the option they can see.
+
+Names the overlay does not contain fall back to the embedded copies, because a directory with one
+file in it is what debugging one page looks like. The option is refused when the application is
+configured for production: a writable directory ahead of the templates inside the binary is a
+code-execution surface on any host where the deployment user can write, and a startup warning
+about template precedence is a warning nobody reads at three in the morning.
 
 ### 5.4 Context and filters
 
-`View` is the only render entrypoint and injects ambient context: `user`, `profile`,
-`navElements`, `csrfInput`, `pageBase`, `buildVersion`. Applications add their own with
-`a.Share("key", fn)`, called per request, which is how application-wide navigation and feature
-flags reach templates without every handler remembering them.
+`View` is the only render entrypoint and injects ambient context: `user`, `isAuthenticated`,
+`navElements`, `can`, `csrfInput`, `pageBase`, `requestId`, `buildVersion`, `debug`,
+`siteTitle`. Applications add their own with `a.Share("key", fn)`, called per request, which is
+how application-wide navigation and feature flags reach templates without every handler
+remembering them. Render context keys must match `[a-zA-Z0-9_]+`; a key a template could not name
+is rejected at the boundary with the offending key named, rather than at render depth with an
+error pointing at a line of a template.
 
-Two rules are enforced rather than documented:
+Three rules are enforced rather than documented:
 
-- Errors placed in a render context are converted to HTML-escaped strings before rendering
-  (`fmt.Stringer` values reaching a template bypass autoescaping and are an XSS vector).
-- Custom filters are registered once, in `init()`, with namespaced names, and must be pure. A
-  filter that closes over request state is a data race, because pongo2's filter registry is
-  process-global. Framework filters: `hasPermission`, `keyValue`, `jsonify`, `linebreaksbr`.
+- Errors placed in a render context are converted to strings before rendering, and
+  `template.HTML` is converted to a value the engine treats as already escaped. pongo2 does not
+  know the `html/template` types, so without that conversion a login page renders its CSRF input
+  as visible markup; and a `fmt.Stringer` reaching a template bypasses autoescaping, which is an
+  XSS vector with the error message of a failed database read as the payload.
+- Custom filters are registered once, in `init()`, and must be pure. pongo2's filter registry is
+  a process-global map, so a filter registered from a constructor is a data race in any
+  application that builds two renderers, and a filter closing over request state is a race
+  between requests. A registration that collided with another package's name is remembered and
+  reported at renderer construction, because a template's "unknown filter" error is otherwise a
+  question about an unrelated package.
+- Framework filters are `jsonify`, `keyValue`, `pluralizeEN`, and `hasPermission`.
+  `pluralizeEN` is named for the language it implements: a filter called `pluralize` that knows
+  only English is a promise broken for whoever localizes the application. `keyValue` sorts a map
+  because Go maps do not iterate in order, and an unsorted map in a template is a document that
+  differs on every request. Anything that needs the current request is not a filter at all:
+  `can("MODULE:GRANT")` is a per-request callable built for one request and unreachable from any
+  other.
+
 
 ## 6. Database (`webapp/db`)
 
@@ -572,27 +622,58 @@ user sees a generic page and an ID that matches a log line. `HandlerErr` returns
 automatically, which removes the per-branch "render the internal error template and remember to
 return" boilerplate that such applications accumulate and, more often, forget.
 
-`NotFound` and `MethodNotAllowed` render templates rather than plain text. Template execution
-failures that occur *after* headers are written are logged and abort the stream; that hook is
-overridable, since it is the one error path an application may want to customize (e.g. emitting
-a partial-page placeholder for an htmx fragment).
+Three error templates ship, because those are the three cases a viewer can act on differently:
+`@core/errors/notfound.p2` for 404 and 410, `@core/errors/unauthorized.p2` for 401 and 403,
+`@core/errors/internal.p2` for everything from 500 up. Everything else — a 405, a 418, a code
+nobody designed a page for — uses the built-in page, which is plain formatting over escaped
+values and therefore cannot fail. A refusal names the grant it needed, taken from a typed denial
+rather than parsed back out of an error string, and states it to an anonymous viewer as well as
+to a signed-in one: the person best placed to fix a missing permission is often the one who
+cannot reach the page to see it.
+
+Error pages are rendered from namespace-qualified names, and that is what keeps an application
+mid-deploy from replacing the page that explains itself. `SetErrorPage` replaces the renderer for
+applications with their own error design.
+
+The status of an error response is written only when a body exists to carry it. A render that
+fails having produced nothing — the usual case, and the required behaviour of a renderer — is
+replaced by the built-in page at the same status rather than being preceded by a `200` that no
+error page can follow. An error page that itself fails is logged together with the original
+cause, because the pair is one story and either half alone reads like a mystery.
 
 ### 8.4 Navigation
 
-`NavItem{Weight, Label, Href, Icon, Perm, Children}`, registered by the application and by
-modules. Higher weights sort first; ties break alphabetically so ordering is deterministic.
-`pageBase`, injected into every render, lets the nav fragment mark the active item without every
-handler saying which page it is. Weight values are documented as coarse bands (90+ for admin,
-50–89 for primary sections, below 50 for auxiliary) so a module author does not need to know
-what else is installed to place themselves sensibly.
+`NavItem{Weight, Label, Href, Icon, Perm, Children}`, registered with `a.Nav(...)` by the
+application and by modules. Higher weights sort first; ties break alphabetically so ordering is
+deterministic and the order of `Nav` calls cannot change what a page looks like. Weight values
+are documented as coarse bands (90+ for admin, 50–89 for primary sections, below 50 for
+auxiliary) so a module author does not need to know what else is installed to place themselves
+sensibly.
+
+Items are filtered per request, not at registration, because the answer depends on who is asking:
+an item whose `Perm` is set is hidden from viewers who do not hold it, and hiding it through the
+same `auth.HasPerm` that guards the route behind it is what keeps a visible link and a refused
+destination from disagreeing. The zero `Perm` means no gate, which is the right default for a home
+page and the wrong one for anything else — a module that leaves it unset is saying out loud that
+the link is public.
+
+The fragment receives `navElements` already filtered and ordered, with each entry's `Base`
+derived from the first segment of its `Href`; `pageBase`, injected into every render from the
+request path, is what marks the active item without any handler declaring which page it is.
 
 ### 8.5 Static assets
 
-Core assets ship embedded and are served at `/static/*` with ETags and a modest
-`Cache-Control`. Applications register their own with a namespace, which becomes a URL prefix, so
-module assets cannot collide. An `Asset("css/x.css")` helper returns a build-versioned URL for
-cache-busting. Third-party CSS/JS is expected to be vendored via `go:generate` and gitignored, so
-builds work without network access.
+The framework's own assets ship embedded and are served at `/static/core/`. Embedded files have
+no modification time, so the file server has no validator to offer; `Cache-Control: public,
+max-age=3600` is set deliberately rather than falling out of the transport, and `Asset("x.css")`
+stamps the URL with the build version so a browser that cached the previous deploy asks again.
+Query-parameter stamping rather than filename rewriting because the assets are embedded: there is
+no build step in which `app.a4f3c1.css` could be produced.
+
+Not yet implemented: per-module asset namespaces under `/static/` with ETags, so that two modules
+cannot ship different files at the same address, and vendoring third-party CSS/JS through
+`go:generate`.
+
 
 ## 9. Modules
 
