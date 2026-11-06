@@ -54,5 +54,4 @@
 // is in Service.CreateAccount: an application that reaches the internet with
 // open signups and a permission system it has not exercised in production is
 // a security incident waiting for a patient attacker.
-
 package auth
