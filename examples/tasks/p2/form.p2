@@ -1,0 +1,82 @@
+{% extends "@core/base.p2" %}
+
+{% comment %}
+  The task editor, for a task that exists and one that does not yet.
+
+  The submitted values come back through the rejection's context, so a refused
+  submission re-renders with the words still in the fields. That is not a
+  convenience: the alternative is a person re-typing a paragraph because a title
+  was one character long, and the version of this page that did that taught every
+  one of its users to write as little as possible.
+
+  The password rule applies here in reverse: nothing sensitive is in this form, so
+  the values are safe to echo. A template that echoed a password field to be
+  "helpful" would be writing the credential into the browser's form state and into
+  whatever a cache stored of the page.
+{% endcomment %}
+
+{% block title %}{% if existed %}Edit task{% else %}New task{% endif %} · {{ siteTitle|default:"Tasks" }}{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/tasks/css/tasks.css">
+{% endblock %}
+
+{% block content %}
+<section class="task-editor">
+  <h1 class="task-heading">{% if existed %}Edit task{% else %}New task{% endif %}</h1>
+
+  {% if rejected %}
+  <div class="task-errors" role="alert">
+    <p class="task-errors-heading">That was not saved.</p>
+    <ul class="task-error-list">
+      {% for reason in rejected %}
+      <li>{{ reason }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  <form method="post" action="{{ action }}">
+    {{ csrfInput }}
+
+    <label class="field">
+      <span class="field-label">Title</span>
+      <input
+        type="text"
+        name="title"
+        value="{{ task.Title }}"
+        maxlength="{{ maxTitle }}"
+        autocomplete="off"
+        autofocus
+        required>
+      <span class="field-hint">What needs doing, in one line.</span>
+    </label>
+
+    <label class="field">
+      <span class="field-label">Notes</span>
+      <textarea name="notes" rows="6" maxlength="{{ maxNotes }}">{{ task.Notes }}</textarea>
+      <span class="field-hint">Optional. Links, context, the thing you will forget.</span>
+    </label>
+
+    {% if existed %}
+    <label class="field field--checkbox">
+      <input type="checkbox" name="done" value="true"{% if task.Done %} checked{% endif %}>
+      <span class="field-label">Finished</span>
+    </label>
+    {% else %}
+    {% comment %}
+      No "done" box when creating. A task created already complete is a record of
+      work that did not need the tracker, and the box would be checked by accident
+      more often than it is used on purpose.
+    {% endcomment %}
+    {% endif %}
+
+    <p class="task-editor-actions">
+      <button type="submit" class="button button--primary">
+        {% if existed %}Save{% else %}Add task{% endif %}
+      </button>
+      <a class="button" href="{{ cancel }}">Cancel</a>
+    </p>
+  </form>
+</section>
+{% endblock %}

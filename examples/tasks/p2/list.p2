@@ -1,0 +1,114 @@
+{% extends "@core/base.p2" %}
+
+{% comment %}
+  The task list.
+
+  Every value here is the viewer's own: the handler filtered by the profile the
+  session resolved, so this page has no opinion about whose tasks exist and
+  cannot accidentally develop one.
+
+  Two gates are at work, and they are deliberately spelled the same way in two
+  different files. The links below are wrapped in can("tasks:edit") because that
+  is the permission the route behind them is gated on. When the two disagree in
+  the direction of a visible link, someone clicks it and files a report; when
+  they disagree in the direction of a hidden link, nothing happens, and the fix
+  someone reaches for is to stop asking in the template. That is why every gated
+  control here names the same grant the router does.
+{% endcomment %}
+
+{% block title %}Tasks · {{ siteTitle|default:"Tasks" }}{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/tasks/css/tasks.css">
+{% endblock %}
+
+{% block content %}
+<section class="task-page">
+  <header class="task-toolbar">
+    <h1 class="task-heading">Tasks</h1>
+
+    <nav class="task-filters" aria-label="Filter">
+      <a class="task-filter{% if state == 'all' %} task-filter--active{% endif %}" href="{{ allURL }}">All</a>
+      <a class="task-filter{% if state == 'open' %} task-filter--active{% endif %}" href="{{ openURL }}">Open</a>
+      <a class="task-filter{% if state == 'done' %} task-filter--active{% endif %}" href="{{ doneURL }}">Done</a>
+    </nav>
+
+    {% if can("tasks:edit") %}
+    <a class="button button--primary" href="/ui/task/new">New task</a>
+    {% endif %}
+  </header>
+
+  <p class="task-count">
+    {{ total }} {{ total|pluralizeEN:"task,tasks" }},
+    showing {{ state|default:"all" }}
+  </p>
+
+  {% if tasks %}
+  <ul class="task-list">
+    {% for task in tasks %}
+    <li class="task-row{% if task.Done %} task-row--done{% endif %}">
+      <div class="task-body">
+        <p class="task-title">{{ task.Title }}</p>
+        {% if task.Notes %}
+        <p class="task-notes">{{ task.Notes|linebreaksbr }}</p>
+        {% endif %}
+        <p class="task-meta">
+          added {{ task.CreatedAt|date:"2006-01-02" }}
+          {%- if task.Done %}, finished {{ task.UpdatedAt|date:"2006-01-02" }}{% endif %}
+        </p>
+      </div>
+
+      <div class="task-actions">
+        {% if can("tasks:edit") %}
+        <form method="post" action="/ui/task/{{ task.ID }}/complete" class="task-inline-form">
+          {{ csrfInput }}
+          <input type="hidden" name="next" value="/ui/task/?state={{ state }}">
+          <button type="submit" class="button">
+            {{ task.Done|yesno:"Mark open,Mark done" }}
+          </button>
+        </form>
+        <a class="button" href="/ui/task/{{ task.ID }}/edit">Edit</a>
+        {% endif %}
+
+        {% if can("tasks:delete") %}
+        <form method="post" action="/ui/task/{{ task.ID }}/delete" class="task-inline-form">
+          {{ csrfInput }}
+          <input type="hidden" name="next" value="/ui/task/?state={{ state }}">
+          <button type="submit" class="button button--danger">Delete</button>
+        </form>
+        {% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+
+  {% if pages > 1 %}
+  <nav class="task-pager" aria-label="Pages">
+    {% if page > 1 %}
+    <a class="button" href="{{ prevURL }}">Previous</a>
+    {% endif %}
+    <span class="task-page-number">Page {{ page }} of {{ pages }}</span>
+    {% if page < pages %}
+    <a class="button" href="{{ nextURL }}">Next</a>
+    {% endif %}
+  </nav>
+  {% endif %}
+
+  {% else %}
+  <p class="task-empty">
+    {% if state == 'open' %}
+    Nothing open. Either the work is finished or the filter is one step late.
+    {% elif state == 'done' %}
+    Nothing finished yet.
+    {% else %}
+    No tasks.
+    {% if can("tasks:edit") %}
+    The button above makes the first one.
+    {% else %}
+    Someone holding the edit grant makes the first one.
+    {% endif %}
+    {% endif %}
+  </p>
+  {% endif %}
+</section>
+{% endblock %}

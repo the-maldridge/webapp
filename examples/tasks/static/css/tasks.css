@@ -1,0 +1,164 @@
+/*
+  The tasks module's stylesheet.
+
+  It exists to be a second asset tree, not to be a design. Two modules shipping
+  css/tasks.css is the case the URL namespace is for, and a framework stylesheet
+  that already covered a task list would make that case impossible to demonstrate.
+
+  Everything hangs off a task- prefix and nothing styles a bare element, which is
+  the same rule the framework's own sheet follows from the other side: a headline
+  rule here would be an opinion the next module has to undo.
+*/
+
+.task-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--wa-space);
+  border-bottom: 1px solid var(--wa-line);
+  padding-bottom: calc(var(--wa-space) / 2);
+}
+
+.task-heading { margin: 0; font-size: 1.4rem; }
+
+.task-filters {
+  display: flex;
+  gap: calc(var(--wa-space) / 2);
+  margin-left: auto;
+}
+
+.task-filter {
+  padding: 0.15rem 0.5rem;
+  border-radius: var(--wa-radius);
+  text-decoration: none;
+}
+
+.task-filter--active {
+  background: var(--wa-bg-alt);
+  border: 1px solid var(--wa-line);
+  color: inherit;
+  font-weight: 600;
+}
+
+.task-count { color: var(--wa-muted); font-size: 0.9em; }
+
+.task-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--wa-line);
+  border-radius: var(--wa-radius);
+}
+
+.task-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--wa-space);
+  padding: calc(var(--wa-space) * 0.75) var(--wa-space);
+  border-top: 1px solid var(--wa-line);
+}
+
+.task-row:first-child { border-top: 0; }
+
+.task-row--done .task-title { color: var(--wa-muted); }
+
+.task-body { flex: 1 1 20rem; min-width: 0; }
+
+.task-title { margin: 0; overflow-wrap: anywhere; }
+
+.task-notes {
+  margin: 0.25rem 0 0;
+  color: var(--wa-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.task-meta {
+  margin: 0.25rem 0 0;
+  color: var(--wa-muted);
+  font-size: 0.8em;
+}
+
+.task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--wa-space) / 2);
+}
+
+.task-inline-form { margin: 0; }
+
+.button--danger {
+  background: var(--wa-bg-alt);
+  border-color: var(--wa-danger);
+  color: var(--wa-danger);
+}
+
+.task-editor { max-width: 34rem; }
+
+.task-editor-actions {
+  display: flex;
+  gap: calc(var(--wa-space) / 2);
+}
+
+.field-hint {
+  display: block;
+  color: var(--wa-muted);
+  font-size: 0.8em;
+}
+
+.field--checkbox {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+.field--checkbox input { width: auto; }
+
+.task-errors {
+  padding: calc(var(--wa-space) * 0.5) var(--wa-space);
+  color: var(--wa-danger);
+  border: 1px solid var(--wa-danger);
+  border-radius: var(--wa-radius);
+}
+
+.task-errors-heading { margin: 0; font-weight: 600; }
+
+.task-error-list { margin: 0.25rem 0 0; padding-left: 1.2rem; }
+
+.task-empty {
+  padding: var(--wa-space);
+  color: var(--wa-muted);
+  border: 1px dashed var(--wa-line);
+  border-radius: var(--wa-radius);
+}
+
+.task-pager {
+  display: flex;
+  align-items: baseline;
+  gap: calc(var(--wa-space) / 2);
+  margin-top: var(--wa-space);
+}
+
+.task-page-number { color: var(--wa-muted); font-size: 0.9em; }
+
+.task-stats { max-width: 40rem; }
+
+.task-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: calc(var(--wa-space) / 2);
+  margin: var(--wa-space) 0;
+}
+
+.task-stat {
+  padding: calc(var(--wa-space) * 0.75);
+  border: 1px solid var(--wa-line);
+  border-radius: var(--wa-radius);
+}
+
+.task-stat dt { color: var(--wa-muted); font-size: 0.85em; }
+
+.task-stat dd { margin: 0; font-size: 1.6rem; }
+
+.task-action { margin: 0; }

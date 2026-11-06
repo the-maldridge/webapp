@@ -1,0 +1,45 @@
+{% extends "@core/base.p2" %}
+
+{% comment %}
+  The module's administrative page.
+
+  It counts every account's tasks, which is why the route is gated on
+  TASKS:ADMIN and the navigation item names the same grant. A page whose whole
+  content is "how much does everyone have" cannot be gated by hiding a link: the
+  address is the page, so the guard is the security and this template is only
+  what is left once that guard has said yes.
+{% endcomment %}
+
+{% block title %}Task totals · {{ siteTitle|default:"Tasks" }}{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/tasks/css/tasks.css">
+{% endblock %}
+
+{% block content %}
+<section class="task-stats">
+  <h1 class="task-heading">Task totals</h1>
+  <p class="task-count">Every account in this database, not only yours.</p>
+
+  <dl class="task-stat-grid">
+    <div class="task-stat">
+      <dt>Tasks</dt>
+      <dd>{{ total }}</dd>
+    </div>
+    <div class="task-stat">
+      <dt>Open</dt>
+      <dd>{{ open }}</dd>
+    </div>
+    <div class="task-stat">
+      <dt>Finished</dt>
+      <dd>{{ done }}</dd>
+    </div>
+    <div class="task-stat">
+      <dt>People with tasks</dt>
+      <dd>{{ owners }}</dd>
+    </div>
+  </dl>
+
+  <p class="task-action"><a class="button" href="/ui/task/">Back to my tasks</a></p>
+</section>
+{% endblock %}
