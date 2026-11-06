@@ -1013,8 +1013,15 @@ real cookie round trip, login failures that are byte-for-byte identical, escaped
 payloads (a `<script>` in an error must never round-trip), migration idempotency across two boots of
 the same database, and the required-template compile check.
 
-The example application in `examples/tasks` is the integration test: authentication, ownership,
-permissions, pagination, form validation, theming, and both database drivers.
+The example application in `examples/tasks` is the integration test: a module contributing routes,
+templates, a stylesheet, a table, a migration, permissions, and navigation, wrapped in an
+application that owns sign-in, the root redirect, and a configuration-only bootstrap account. Its
+suite drives the real handler chain with the real session codec, CSRF check, and database, which
+pins what a mocked test cannot — a module's guarded routes working despite authentication being
+installable only after construction; another account's row answering 404 rather than 403, with one
+override confined to the function that loads the row; a refused submission re-rendered at 422 with
+what was typed still in it; a disabled module stopping route, asset, and permission serving while
+the application's own front door keeps working; and either database driver from environment alone.
 
 ## 14. Milestones
 
@@ -1033,15 +1040,16 @@ login and logout handlers.
 **M4 — modules and polish.** Registry, scopes, capability interfaces, static asset namespacing,
 `NewTestApp`/`testas`, example application, package documentation. Built: the registry
 (`Register`/`WithModule`), scope selection, the four capability interfaces, per-module template and
-asset namespaces with `ETag`s (§9), and `webapptest`/`testas`. Remaining: the example application
-and the package documentation pass.
+asset namespaces with `ETag`s (§9), `webapptest`/`testas`, the example application in
+`examples/tasks`, and the package documentation pass.
 
 M4 was originally "forms": binding, validation, re-render helpers, typed parameters, pagination.
 Typed parameters, pagination, and the re-render contract turned out to belong to the request spine
 rather than to a separate layer — they are how a handler learns what it was asked for, and a
 render funnel that cannot re-render with values cannot report a refusal. Splitting them out would
 have produced a package whose only job was to be imported by the thing that already does the work.
-What remains of the original M4 is the registry, namespacing, test helpers, and the example.
+What the original M4 became is the registry, namespacing, test helpers, and the example, all of
+which are built.
 
 ## 15. Open questions
 
