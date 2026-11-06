@@ -368,7 +368,7 @@ func (c *Config) lookupBool(suffix string) (value bool, present bool, err error)
 	return v, true, nil
 }
 
-// splitList parses a comma-separated module allowlist. Empty elements
+// splitList parses a comma-separated module whitelist. Empty elements
 // are dropped so that "a,,b" and " a, b " behave sensibly.
 func splitList(v string) []string {
 	var out []string

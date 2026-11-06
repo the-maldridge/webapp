@@ -346,7 +346,7 @@ func (a *App) defaultErrorPage(w http.ResponseWriter, r *http.Request, status in
 //
 // The target is expected to be a path the application generated. Echoing
 // user-supplied values into it makes an open redirect, so callers who
-// take a destination from a form must validate it against a allowlist
+// take a destination from a form must validate it against a whitelist
 // first.
 func (a *App) SeeOther(w http.ResponseWriter, r *http.Request, url string) {
 	w.Header().Set("Location", url)
