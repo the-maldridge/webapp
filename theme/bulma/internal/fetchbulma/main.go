@@ -48,10 +48,10 @@ const lockFile = "bulma.lock"
 // content negotiation, which is what makes a stdlib client sufficient.
 const urlFormat = "https://registry.npmjs.org/bulma/-/bulma-%s.tgz"
 
-// maxBundleBytes bounds what will be read from the network. The real bundle is
-// roughly 200KB and the whole package about 7MB unpacked; anything larger than
-// this is not the artifact this program was written for, and reading it would
-// mean an unbounded allocation controlled by a remote host.
+// maxBundleBytes bounds what will be read from the network. The whole package
+// tarball is about 650KB; anything larger than this is not the artifact this
+// program was written for, and reading without a bound would mean an allocation
+// controlled by a remote host.
 const maxBundleBytes = 8 << 20
 
 // fileMap maps a path inside the npm package to where it lands here. Only the
@@ -86,6 +86,19 @@ func run(version string, check, digest, list bool) error {
 	}
 	if version == "" {
 		return fmt.Errorf("%s declares no version and none was given", lockFile)
+	}
+
+	// Checking is offline by design. Its question is "is what is already here the
+	// thing the manifest describes", and fetching a 660 KB tarball to answer it
+	// would make the one operation a build needs to be able to do without the
+	// network depend on having the network. It therefore only makes sense about
+	// the locked version, and says so rather than checking something else.
+	if check {
+		if version != lock.version {
+			return fmt.Errorf("--check verifies what is on disk against %s, which pins %s, not %s",
+				lockFile, lock.version, version)
+		}
+		return checkOnDisk(lock, version)
 	}
 
 	// A version other than the locked one is a report, never a write: silently
@@ -137,16 +150,6 @@ func run(version string, check, digest, list bool) error {
 		return err
 	}
 
-	if check {
-		for _, dest := range sortedKeys(fileMap) {
-			if _, err := os.Stat(dest); err != nil {
-				return fmt.Errorf("%s is missing; run: go generate ./...", dest)
-			}
-		}
-		fmt.Printf("bulma %s matches %s\n", version, lockFile)
-		return nil
-	}
-
 	if reportOnly {
 		fmt.Printf("bulma %s is not the locked version %s; nothing written. Update %s to vendor it.\n",
 			version, lock.version, lockFile)
@@ -177,12 +180,18 @@ func download(version string) ([]byte, error) {
 		return nil, fmt.Errorf("bulma %s: registry answered %s", version, resp.Status)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBundleBytes))
+	// One byte past the bound, so that a response which is exactly as large as the
+	// limit is reported as too large rather than accepted as coincidence.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBundleBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("could not read bulma %s: %w", version, err)
 	}
 	if len(body) == 0 {
 		return nil, fmt.Errorf("bulma %s: registry returned an empty body", version)
+	}
+	if len(body) > maxBundleBytes {
+		return nil, fmt.Errorf("bulma %s: registry sent more than %d bytes, which is not the "+
+			"artifact this program knows how to vendor", version, maxBundleBytes)
 	}
 	return body, nil
 }
@@ -216,6 +225,14 @@ func extract(body []byte) (map[string][]byte, error) {
 		}
 		if hdr.Typeflag != tar.TypeReg {
 			return nil, fmt.Errorf("%s is not a regular file in the archive", hdr.Name)
+		}
+		// A member's declared size is honoured only up to the same bound the
+		// download has, and a negative one is rejected outright rather than
+		// reaching LimitReader, where a negative limit means "no limit" and a
+		// corrupt or hostile header would turn into an unbounded read.
+		if hdr.Size < 0 || hdr.Size > maxBundleBytes {
+			return nil, fmt.Errorf("%s claims %d bytes in the archive, which is not a plausible "+
+				"size for it", hdr.Name, hdr.Size)
 		}
 		// A member declaring its own size gets that much and no more. Reading
 		// without the bound would let a malicious or corrupt archive declare a
@@ -281,6 +298,49 @@ func verifyLock(lock lockInfo, version string, files map[string][]byte) error {
 				dest, got[:], lockFile, want)
 		}
 	}
+	return nil
+}
+
+// destinations lists the files this program writes, sorted.
+//
+// It is the values of fileMap rather than its keys, and the distinction is the
+// kind that reads wrong in a hurry: the keys are names inside the archive, and a
+// check that stat'd those would be looking for a path that exists only in the
+// download.
+func destinations() []string {
+	out := make([]string, 0, len(fileMap))
+	for _, dest := range fileMap {
+		out = append(out, dest)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// checkOnDisk verifies the vendored files already in place against the manifest,
+// without downloading anything.
+//
+// The check reads the digests rather than merely the names, because "the file
+// exists" is satisfied by a truncated download and by an error page saved under
+// a stylesheet's name, which are the two failures that produce a working build of
+// a broken page.
+func checkOnDisk(lock lockInfo, version string) error {
+	for _, dest := range destinations() {
+		data, err := os.ReadFile(dest)
+		if err != nil {
+			return fmt.Errorf("%s is missing; run: go generate ./...", dest)
+		}
+		want, ok := lock.files[dest]
+		if !ok {
+			return fmt.Errorf("%s has no digest in %s, so it cannot be verified; run go generate ./... "+
+				"and record the digest it prints", dest, lockFile)
+		}
+		sum := sha256.Sum256(data)
+		if got := hex.EncodeToString(sum[:]); got != want {
+			return fmt.Errorf("%s has digest %s but %s says %s; it is not the reviewed artifact, "+
+				"so run go generate ./... rather than editing the manifest", dest, got, lockFile, want)
+		}
+	}
+	fmt.Printf("bulma %s matches %s\n", version, lockFile)
 	return nil
 }
 

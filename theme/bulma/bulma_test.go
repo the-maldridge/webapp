@@ -3,6 +3,7 @@ package bulma_test
 import (
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -232,6 +233,97 @@ func TestNoInlineHandlers(t *testing.T) {
 				"application setting Content-Security-Policy: script-src 'self' would lose its "+
 				"navigation", forbidden)
 		}
+	}
+}
+
+// TestFetcherCheckVerifiesDigests runs the generator's offline check and then
+// corrupts a bundle in a copy of the package to confirm the check fails.
+//
+// The corrupt case is the point. A check that only proves a file exists passes for
+// a truncated download and for an error page saved under a stylesheet's name, and
+// those are the two failures that produce a build which works and a page that does
+// not.
+func TestFetcherCheckVerifiesDigests(t *testing.T) {
+	requireBundle(t)
+
+	binary := buildFetcher(t)
+
+	if out := runFetcher(t, binary, ".", "-check"); !strings.Contains(out, lockValue(t, "version")) {
+		t.Errorf("-check on a matching tree did not report the locked version: %s", out)
+	}
+
+	// A scratch copy, because the corrupted file must not outlive the test and the
+	// real tree is gitignored output that a stray write would leave looking valid.
+	dir := t.TempDir()
+	for _, name := range []string{lockPath, bundlePath, licensePath} {
+		copyInto(t, name, filepath.Join(dir, name))
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, bundlePath))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	data[len(data)/2] ^= 0xff
+	if err := os.WriteFile(filepath.Join(dir, bundlePath), data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if out, err := runFetcherAllowFail(t, binary, dir, "-check"); err == nil {
+		t.Errorf("-check accepted a bundle whose digest does not match %s: %s", lockPath, out)
+	} else if !strings.Contains(out, bundlePath) {
+		t.Errorf("-check's failure does not name the file at fault: %s", out)
+	}
+}
+
+// buildFetcher compiles the vendored generator so it can be run against scratch
+// directories the tests control.
+func buildFetcher(t *testing.T) string {
+	t.Helper()
+
+	binary := filepath.Join(t.TempDir(), "fetchbulma")
+	cmd := exec.Command("go", "build", "-o", binary, "./internal/fetchbulma")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("building the generator: %v\n%s", err, out)
+	}
+	return binary
+}
+
+// runFetcher runs the generator in dir and returns its combined output, failing
+// the test if it exits non-zero.
+func runFetcher(t *testing.T, binary, dir string, args ...string) string {
+	t.Helper()
+
+	out, err := runFetcherAllowFail(t, binary, dir, args...)
+	if err != nil {
+		t.Fatalf("fetchbulma %v: %v\n%s", args, err, out)
+	}
+	return out
+}
+
+// runFetcherAllowFail runs the generator and reports both its output and whether
+// it succeeded.
+func runFetcherAllowFail(t *testing.T, binary, dir string, args ...string) (string, error) {
+	t.Helper()
+
+	cmd := exec.Command(binary, args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// copyInto copies one file into a destination, creating its directory.
+func copyInto(t *testing.T, src, dst string) {
+	t.Helper()
+
+	data, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", src, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", filepath.Dir(dst), err)
+	}
+	if err := os.WriteFile(dst, data, 0o644); err != nil {
+		t.Fatalf("WriteFile(%s): %v", dst, err)
 	}
 }
 
