@@ -63,6 +63,13 @@ type App struct {
 	// modules describes what the module registry resolved and loaded.
 	modules *moduleState
 
+	// theme is the resolved active theme: the templates the framework renders
+	// itself and the stylesheet they link. Resolved once during construction so
+	// that the template mount and the asset mount cannot disagree about which
+	// theme is active. Nil only when templating is disabled, in which case
+	// neither mount consults the templates and only the asset mount runs.
+	theme ThemeInfo
+
 	// moduleStatics are the asset trees modules contributed, mounted once a
 	// router exists to mount them on.
 	moduleStatics []moduleStatic
@@ -144,6 +151,17 @@ func New(opts ...Option) (*App, error) {
 		shared:       map[string]Provider{},
 		buildVersion: readBuildVersion(),
 	}
+
+	// The theme is resolved before anything that mounts a template or an asset,
+	// and before the database opens, because a name that matches no registered
+	// theme is the cheapest possible failure to detect and the most expensive
+	// possible one to discover after a deploy: every page renders, and every
+	// page is the wrong page.
+	theme, err := resolveTheme(config)
+	if err != nil {
+		return nil, err
+	}
+	a.theme = theme
 
 	// Components contribute models before the database opens, so a
 	// component's tables exist on the first boot rather than the second.

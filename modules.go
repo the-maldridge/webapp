@@ -15,7 +15,6 @@ import (
 	"github.com/the-maldridge/webapp/auth"
 	"github.com/the-maldridge/webapp/db"
 	"github.com/the-maldridge/webapp/tmpl"
-	"github.com/the-maldridge/webapp/ui"
 )
 
 // Module registry.
@@ -209,8 +208,8 @@ func validateModuleInfo(info ModuleInfo) (ModuleInfo, error) {
 	case !validModuleName(info.Name):
 		return info, fmt.Errorf("module name %q may not contain %q, a slash, a backslash, or whitespace",
 			info.Name, tmpl.NamespaceSeparator)
-	case info.Name == ui.Namespace:
-		return info, fmt.Errorf("module name %q is reserved for the framework", info.Name)
+	case info.Name == templateNamespace:
+		return info, fmt.Errorf("module name %q is reserved for the active theme", info.Name)
 	case info.Name == debugNamespace:
 		return info, fmt.Errorf("module name %q is reserved for the template debug overlay", info.Name)
 	case info.Factory == nil:
@@ -638,14 +637,14 @@ func (a *App) installModules() error {
 	// ordinary case — a module mounting templates and assets under its own
 	// name — look like a collision, because a template namespace and a URL
 	// prefix are different address spaces that happen to be spelled alike.
-	templateClaims := map[string]string{ui.Namespace: "the framework"}
+	templateClaims := map[string]string{templateNamespace: "the active theme"}
 	if a.Config.TemplateDebugDir != "" {
 		templateClaims[debugNamespace] = "the template debug overlay"
 	}
 	for _, root := range a.Config.templateRoots {
 		templateClaims[root.namespace] = "an application template root"
 	}
-	staticClaims := map[string]string{ui.Namespace: "the framework"}
+	staticClaims := map[string]string{templateNamespace: "the active theme"}
 
 	for _, info := range plan {
 		scope := &Scope{app: a, info: info, values: state.values}
@@ -730,8 +729,8 @@ func claimNamespace(module, ns string, claimed map[string]string) (string, error
 		return "", fmt.Errorf("webapp: module %q: %w", module, err)
 	}
 	switch clean {
-	case ui.Namespace:
-		return "", fmt.Errorf("webapp: module %q: namespace %q is reserved for the framework", module, ui.Namespace)
+	case templateNamespace:
+		return "", fmt.Errorf("webapp: module %q: namespace %q is reserved for the active theme", module, templateNamespace)
 	case debugNamespace:
 		return "", fmt.Errorf("webapp: module %q: namespace %q is reserved for the template debug overlay", module, debugNamespace)
 	}

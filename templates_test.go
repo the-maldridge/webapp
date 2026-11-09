@@ -14,7 +14,6 @@ import (
 	"testing/fstest"
 
 	"github.com/the-maldridge/webapp/auth"
-	"github.com/the-maldridge/webapp/ui"
 )
 
 // mapFS builds an in-memory template root.
@@ -52,9 +51,9 @@ func TestNewInstallsCoreTemplates(t *testing.T) {
 	if a.Renderer == nil {
 		t.Fatal("New installed no renderer; every page would be a 500")
 	}
-	if !a.registry.Mounted(ui.Namespace) {
+	if !a.registry.Mounted(templateNamespace) {
 		t.Errorf("registry is missing the %q namespace: %v",
-			ui.Namespace, a.registry.Namespaces())
+			templateNamespace, a.registry.Namespaces())
 	}
 }
 
@@ -342,7 +341,7 @@ func TestCoreErrorPagesCannotBeShadowed(t *testing.T) {
 }
 
 func TestWithTemplatesRejectsReservedAndInvalid(t *testing.T) {
-	if _, err := newTestAppNoBuild(t, WithTemplates(ui.Namespace, mapFS(nil))); err == nil {
+	if _, err := newTestAppNoBuild(t, WithTemplates(templateNamespace, mapFS(nil))); err == nil {
 		t.Error("an application was allowed to mount the framework's namespace")
 	}
 	if _, err := newTestAppNoBuild(t, WithTemplates("a/b", mapFS(nil))); err == nil {

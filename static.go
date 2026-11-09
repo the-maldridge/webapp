@@ -9,8 +9,6 @@ import (
 	"net/http"
 	"path"
 	"strings"
-
-	"github.com/the-maldridge/webapp/ui"
 )
 
 // Static assets.
@@ -27,9 +25,13 @@ import (
 // query string cannot: a browser holding a cached copy finds out it is still
 // valid without downloading it again.
 
-// StaticRoot is the URL prefix the framework's static assets are served from.
-// The framework's own files sit below it under css/, leaving the top of the
-// namespace free for applications.
+// StaticRoot is the URL prefix the active theme's static assets are served
+// from. The name says "core" because the assets belong to the namespace the
+// framework renders against, not to whichever theme is filling it: a theme's
+// base layout links its own stylesheet from below this prefix, so switching
+// themes changes what is served here without changing any URL a template has to
+// know. Leaving the top of the namespace below a free directory means a theme
+// organises its assets as it likes.
 const StaticRoot = "/static/core"
 
 // staticNamespacePrefix is the URL prefix every module's assets are served
@@ -37,14 +39,19 @@ const StaticRoot = "/static/core"
 // app.css without either overwriting the other.
 const staticNamespacePrefix = "/static"
 
-// installStatic serves the framework's assets and every module's.
+// installStatic serves the active theme's assets and every module's.
 //
-// The framework's own mount is not optional: the base layout links them, so a
-// build that forgot would render every page with a broken stylesheet, which is
-// the kind of defect that survives review because nobody looks at the network
-// tab during code review.
+// The theme's mount is not optional: its base layout links its own stylesheet,
+// so a build that forgot would render every page unstyled, which is the kind of
+// defect that survives review because nobody looks at the network tab during
+// code review. A theme with no assets at all is allowed and simply mounts
+// nothing, which is the difference between a theme that renders unstyled on
+// purpose and one whose stylesheet was forgotten: the former is a decision, the
+// latter is invisible.
 func (a *App) installStatic() {
-	a.Mount(StaticRoot, staticHandler(StaticRoot, ui.Static()))
+	if tree := a.theme.Static(); tree != nil {
+		a.Mount(StaticRoot, staticHandler(StaticRoot, tree))
+	}
 
 	for _, mod := range a.moduleStatics {
 		prefix := staticNamespacePrefix + "/" + mod.namespace

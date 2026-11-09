@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/the-maldridge/webapp/tmpl"
-	"github.com/the-maldridge/webapp/ui"
 )
 
 // Templating glue.
@@ -35,10 +34,20 @@ type templateRoot struct {
 	fsys      fs.FS
 }
 
+// templateNamespace is the namespace the active theme's templates are mounted
+// under. A theme template refers to its own files through it,
+// "@core/errors/internal.p2", so that a template an application mounts can
+// never be the one an error response renders.
+//
+// It belongs to the core rather than to any theme because it is the core's
+// addressing scheme: the framework renders against it whatever theme is
+// selected, and every theme's required templates are named in its terms.
+const templateNamespace = "core"
+
 // WithTemplates mounts a set of templates under a namespace.
 //
 // It may be given more than once; roots are searched in the order given, and
-// the first one containing a name wins. The framework's own root is mounted
+// the first one containing a name wins. The active theme's root is mounted
 // after everything an application mounts, so an application replaces a
 // framework template by providing a file of the same name and never has to know
 // which files those are in order to avoid them.
@@ -55,9 +64,9 @@ func WithTemplates(namespace string, fsys fs.FS) Option {
 		if err != nil {
 			return fmt.Errorf("WithTemplates: %w", err)
 		}
-		if clean == ui.Namespace {
-			return fmt.Errorf("WithTemplates: %q is reserved for the framework's own templates",
-				ui.Namespace)
+		if clean == templateNamespace {
+			return fmt.Errorf("WithTemplates: %q is reserved for the active theme's templates",
+				templateNamespace)
 		}
 		c.templateRoots = append(c.templateRoots, templateRoot{namespace: clean, fsys: fsys})
 		return nil
@@ -122,16 +131,24 @@ func WithSiteTitle(title string) Option {
 // render-side plumbing that depends on one existing.
 //
 // Mount order is the whole override mechanism: the debug directory first, then
-// the application's roots in the order they were given, then the framework's. A
-// name therefore resolves to whichever copy the operator or the application
-// intended to win, and the framework's copy is the last suggestion rather than a
-// fallback that hides a broken override.
+// the application's roots in the order they were given, then the active theme's.
+// A bare name therefore resolves to whichever copy the operator or the
+// application intended to win, and the theme's copy is the last suggestion
+// rather than a fallback that hides a broken override.
 //
-// The framework's required templates are compiled before this returns. They are
-// rendered when something has already gone wrong, so a defect in one surfaces at
-// the worst possible moment: a broken error page turns a missing record into an
-// unexplained 500, and whoever is debugging the 500 has no idea they are reading
-// a symptom of something else.
+// The theme is mounted under the framework's own namespace rather than
+// alongside it. That is substitution, not overlay, and it has to be: the
+// framework's templates name each other as "@core/base.p2", an absolute name
+// resolves inside one root with no fallback, and an overlay would therefore be
+// invisible to every template the framework renders.
+//
+// The active theme's required templates are compiled before this returns. They
+// are rendered when something has already gone wrong, so a defect in one
+// surfaces at the worst possible moment: a broken error page turns a missing
+// record into an unexplained 500, and whoever is debugging the 500 has no idea
+// they are reading a symptom of something else. Because a theme replaces these
+// files outright, the check is what keeps "use a different theme" from becoming
+// "have no error page", and it fails construction rather than degrading.
 func (a *App) installTemplates() error {
 	a.installNav()
 
@@ -160,9 +177,14 @@ func (a *App) installTemplates() error {
 		mounted = append(mounted, root.namespace)
 	}
 
-	if err := reg.Mount(ui.Namespace, ui.FS()); err != nil {
-		return fmt.Errorf("webapp: could not mount the framework's own templates: %w", err)
+	themeFS := a.theme.FS()
+	if themeFS == nil {
+		return fmt.Errorf("webapp: theme %q returned no templates", a.theme.Name)
 	}
+	if err := reg.Mount(templateNamespace, themeFS); err != nil {
+		return fmt.Errorf("webapp: could not mount theme %q: %w", a.theme.Name, err)
+	}
+	mounted = append(mounted, templateNamespace+" (theme "+a.theme.Name+")")
 	a.registry = reg
 
 	// Debug follows the overlay rather than Config.Debug. An application in
@@ -178,14 +200,15 @@ func (a *App) installTemplates() error {
 		return fmt.Errorf("webapp: could not build the template renderer (mounted: %s): %w",
 			strings.Join(mounted, ", "), err)
 	}
-	if err := render.Verify(ui.Required...); err != nil {
-		return fmt.Errorf("webapp: the framework cannot serve without its own templates: %w", err)
+	if err := render.Verify(a.theme.Required...); err != nil {
+		return fmt.Errorf("webapp: theme %q cannot serve without its templates: %w", a.theme.Name, err)
 	}
 
 	a.Renderer = &templateRenderer{inner: render}
 	a.SetErrorPage(a.renderErrorPage)
 
 	a.log().Debug("webapp: templating installed",
+		"theme", a.theme.Name,
 		"namespaces", strings.Join(reg.Namespaces(), ","),
 		"template_debug", a.Config.TemplateDebugDir != "")
 	return nil

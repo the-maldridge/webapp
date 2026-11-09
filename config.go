@@ -22,6 +22,7 @@ const (
 	suffixCookieSecure = "_COOKIE_SECURE"
 	suffixModules      = "_MODULES"
 	suffixScope        = "_SCOPE"
+	suffixTheme        = "_THEME"
 	suffixReadTimeout  = "_READ_TIMEOUT"
 	suffixWriteTimeout = "_WRITE_TIMEOUT"
 	suffixIdleTimeout  = "_IDLE_TIMEOUT"
@@ -130,6 +131,16 @@ type Config struct {
 	// "worker". A module whose Scopes list does not include it is not loaded.
 	// Empty loads every module regardless of scope.
 	DeploymentScope string
+
+	// Theme names the theme whose templates and stylesheet the application
+	// renders with. Empty selects the framework's own theme, which is
+	// registered by the core and always available.
+	//
+	// It is a whitelist value rather than a path or a filesystem: one binary
+	// carrying several themes switches between them with an environment
+	// variable, which is the same mechanism that switches modules, and a
+	// theme that has to be named at compile time cannot be switched at all.
+	Theme string
 
 	// Timeouts are the http.Server deadlines.
 	Timeouts Timeouts
@@ -291,6 +302,14 @@ func (c *Config) applyEnv() error {
 	}
 	if v, ok := c.lookup(suffixScope); ok && c.DeploymentScope == "" {
 		c.DeploymentScope = strings.TrimSpace(v)
+	}
+	// The theme is filled the same way the scope is, and an option wins for the
+	// same reason: WithTheme leaves a non-empty value here, so the environment
+	// only fills the gap. A name set by either is validated against the
+	// registry during construction rather than here, which is where every
+	// other value that could name something unregistered is checked too.
+	if v, ok := c.lookup(suffixTheme); ok && c.Theme == "" {
+		c.Theme = strings.TrimSpace(v)
 	}
 	if v, ok := c.lookup(suffixClientIPHeader); ok && c.ClientIPHeader == "" {
 		c.ClientIPHeader = strings.TrimSpace(v)

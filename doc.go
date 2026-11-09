@@ -47,7 +47,12 @@
 //	TASKS_DEBUG         verbose errors, template debug    unset
 //	TASKS_PRODUCTION    hardening, no generated secrets   unset
 //	TASKS_COOKIE_SECURE Secure attribute on cookies       true unless TASKS_DEBUG
-//	TASKS_MODULES       comma-separated module whitelist   all
+//	TASKS_MODULES       comma-separated module whitelist  all
+//	TASKS_THEME         theme the framework renders with  builtin
+//
+// A theme is selected by name, and the name has to match a theme that
+// is registered: builtin, or one whose package the application imported.
+// An unknown name is a construction error listing what is available.
 //
 // The database adds its own set, documented in package
 // github.com/the-maldridge/webapp/db, under the same prefix.
