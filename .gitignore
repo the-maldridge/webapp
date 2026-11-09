@@ -1,0 +1,11 @@
+# The Bulma bundle is vendored by `go generate ./...` rather than committed, so
+# these two paths are build output. theme/bulma/bulma.lock is the committed
+# record of which release and which digests `go generate` expects, and is what
+# makes a regenerated bundle verifiable rather than merely present.
+#
+# The package still compiles without them because theme/bulma/static/js is
+# committed alongside, and `go:embed` has something real to embed. That matters:
+# the alternative is a build error in a package nobody touched, reported instead
+# of the test that says "run go generate".
+theme/bulma/static/css/bulma.min.css
+theme/bulma/static/css/LICENSE
