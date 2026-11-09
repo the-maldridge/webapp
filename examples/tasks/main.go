@@ -33,6 +33,14 @@ import (
 	"github.com/the-maldridge/webapp"
 	"github.com/the-maldridge/webapp/auth"
 	"github.com/the-maldridge/webapp/db"
+
+	// The alternative theme is imported for its registration only. Without this
+	// line TASKS_THEME=bulma is a startup error listing what exists, which is the
+	// behaviour an application wants: a deployment variable cannot reach for a
+	// stylesheet that was never compiled into the binary. Importing it is the whole
+	// of what installing a theme is, so switching the example's appearance is a
+	// build decision and not something that can be asked for by accident.
+	_ "github.com/the-maldridge/webapp/theme/bulma"
 )
 
 // EnvBootstrapIdentity and EnvBootstrapPassword name the account the first boot

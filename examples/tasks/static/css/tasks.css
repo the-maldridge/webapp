@@ -6,62 +6,95 @@
   that already covered a task list would make that case impossible to demonstrate.
 
   Everything hangs off a task- prefix and nothing styles a bare element, which is
-  the same rule the framework's own sheet follows from the other side: a headline
-  rule here would be an opinion the next module has to undo.
+  the same rule a theme follows from the other side: a headline rule here would be
+  an opinion the next module has to undo.
+
+  The custom properties are declared here rather than borrowed. The framework
+  publishes no variables for an application to consume, because a variable another
+  component defined is a contract nobody signed: switching theme would leave this
+  sheet resolving to nothing, and a stylesheet whose colours silently fall back to
+  transparent looks fine in whichever theme it was written against. What is shared
+  is the class vocabulary, not the values.
 */
+
+.task-page,
+.task-editor,
+.task-stats {
+  --task-space: 1rem;
+  --task-radius: 6px;
+  --task-line: #d5d9df;
+  --task-muted: #5a636d;
+  --task-bg-alt: #f6f8fa;
+  --task-accent: #1a5fb4;
+  --task-accent-text: #ffffff;
+  --task-danger: #a51d2d;
+}
+
+@media (prefers-color-scheme: dark) {
+  .task-page,
+  .task-editor,
+  .task-stats {
+    --task-line: #3a3f46;
+    --task-muted: #a5adb6;
+    --task-bg-alt: #1f2227;
+    --task-accent: #78aeff;
+    --task-accent-text: #0e1116;
+    --task-danger: #ff8f8f;
+  }
+}
 
 .task-toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: var(--wa-space);
-  border-bottom: 1px solid var(--wa-line);
-  padding-bottom: calc(var(--wa-space) / 2);
+  gap: var(--task-space);
+  border-bottom: 1px solid var(--task-line);
+  padding-bottom: calc(var(--task-space) / 2);
 }
 
 .task-heading { margin: 0; font-size: 1.4rem; }
 
 .task-filters {
   display: flex;
-  gap: calc(var(--wa-space) / 2);
+  gap: calc(var(--task-space) / 2);
   margin-left: auto;
 }
 
 .task-filter {
   padding: 0.15rem 0.5rem;
-  border-radius: var(--wa-radius);
+  border-radius: var(--task-radius);
   text-decoration: none;
 }
 
 .task-filter--active {
-  background: var(--wa-bg-alt);
-  border: 1px solid var(--wa-line);
+  background: var(--task-bg-alt);
+  border: 1px solid var(--task-line);
   color: inherit;
   font-weight: 600;
 }
 
-.task-count { color: var(--wa-muted); font-size: 0.9em; }
+.task-count { color: var(--task-muted); font-size: 0.9em; }
 
 .task-list {
   margin: 0;
   padding: 0;
   list-style: none;
-  border: 1px solid var(--wa-line);
-  border-radius: var(--wa-radius);
+  border: 1px solid var(--task-line);
+  border-radius: var(--task-radius);
 }
 
 .task-row {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: var(--wa-space);
-  padding: calc(var(--wa-space) * 0.75) var(--wa-space);
-  border-top: 1px solid var(--wa-line);
+  gap: var(--task-space);
+  padding: calc(var(--task-space) * 0.75) var(--task-space);
+  border-top: 1px solid var(--task-line);
 }
 
 .task-row:first-child { border-top: 0; }
 
-.task-row--done .task-title { color: var(--wa-muted); }
+.task-row--done .task-title { color: var(--task-muted); }
 
 .task-body { flex: 1 1 20rem; min-width: 0; }
 
@@ -69,41 +102,56 @@
 
 .task-notes {
   margin: 0.25rem 0 0;
-  color: var(--wa-muted);
+  color: var(--task-muted);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
 .task-meta {
   margin: 0.25rem 0 0;
-  color: var(--wa-muted);
+  color: var(--task-muted);
   font-size: 0.8em;
 }
 
 .task-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: calc(var(--wa-space) / 2);
+  gap: calc(var(--task-space) / 2);
 }
 
 .task-inline-form { margin: 0; }
 
+/*
+  The example's own button modifiers.
+
+  A theme provides a button; it does not provide this application's idea of which
+  action is the primary one, so the modifiers that say so belong here. Only the
+  decoration is set: size, box model, and font come from the theme's button, so
+  these read as the theme's buttons with the example's emphasis rather than as a
+  second button implementation sitting on top of the first.
+*/
+.button--primary {
+  background: var(--task-accent);
+  border-color: var(--task-accent);
+  color: var(--task-accent-text);
+}
+
 .button--danger {
-  background: var(--wa-bg-alt);
-  border-color: var(--wa-danger);
-  color: var(--wa-danger);
+  background: var(--task-bg-alt);
+  border-color: var(--task-danger);
+  color: var(--task-danger);
 }
 
 .task-editor { max-width: 34rem; }
 
 .task-editor-actions {
   display: flex;
-  gap: calc(var(--wa-space) / 2);
+  gap: calc(var(--task-space) / 2);
 }
 
 .field-hint {
   display: block;
-  color: var(--wa-muted);
+  color: var(--task-muted);
   font-size: 0.8em;
 }
 
@@ -116,10 +164,10 @@
 .field--checkbox input { width: auto; }
 
 .task-errors {
-  padding: calc(var(--wa-space) * 0.5) var(--wa-space);
-  color: var(--wa-danger);
-  border: 1px solid var(--wa-danger);
-  border-radius: var(--wa-radius);
+  padding: calc(var(--task-space) * 0.5) var(--task-space);
+  color: var(--task-danger);
+  border: 1px solid var(--task-danger);
+  border-radius: var(--task-radius);
 }
 
 .task-errors-heading { margin: 0; font-weight: 600; }
@@ -127,37 +175,37 @@
 .task-error-list { margin: 0.25rem 0 0; padding-left: 1.2rem; }
 
 .task-empty {
-  padding: var(--wa-space);
-  color: var(--wa-muted);
-  border: 1px dashed var(--wa-line);
-  border-radius: var(--wa-radius);
+  padding: var(--task-space);
+  color: var(--task-muted);
+  border: 1px dashed var(--task-line);
+  border-radius: var(--task-radius);
 }
 
 .task-pager {
   display: flex;
   align-items: baseline;
-  gap: calc(var(--wa-space) / 2);
-  margin-top: var(--wa-space);
+  gap: calc(var(--task-space) / 2);
+  margin-top: var(--task-space);
 }
 
-.task-page-number { color: var(--wa-muted); font-size: 0.9em; }
+.task-page-number { color: var(--task-muted); font-size: 0.9em; }
 
 .task-stats { max-width: 40rem; }
 
 .task-stat-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
-  gap: calc(var(--wa-space) / 2);
-  margin: var(--wa-space) 0;
+  gap: calc(var(--task-space) / 2);
+  margin: var(--task-space) 0;
 }
 
 .task-stat {
-  padding: calc(var(--wa-space) * 0.75);
-  border: 1px solid var(--wa-line);
-  border-radius: var(--wa-radius);
+  padding: calc(var(--task-space) * 0.75);
+  border: 1px solid var(--task-line);
+  border-radius: var(--task-radius);
 }
 
-.task-stat dt { color: var(--wa-muted); font-size: 0.85em; }
+.task-stat dt { color: var(--task-muted); font-size: 0.85em; }
 
 .task-stat dd { margin: 0; font-size: 1.6rem; }
 

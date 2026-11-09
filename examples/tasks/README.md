@@ -38,6 +38,7 @@ removed.
 | `p2/list.p2` | Permission-gated controls, a pager, and the `can("…")` callable |
 | `p2/form.p2` | A rejected submission re-rendered with what was typed still in it |
 | `static/css/tasks.css` | A module's own asset namespace, served at `/static/tasks/` |
+| `theme_test.go` | The same pages rendered by a different theme, unedited |
 
 Three behaviours are worth trying by hand, because they are the three an
 application usually gets wrong:
@@ -65,11 +66,41 @@ in DESIGN.md §11; these are the ones this example adds or cares about.
 | `TASKS_DB_DSN` | PostgreSQL DSN | unset |
 | `TASKS_MODULES` | comma-separated modules to load | all linked |
 | `TASKS_SCOPE` | deployment role this process serves | all roles |
+| `TASKS_THEME` | theme the framework's own pages render with | `builtin` |
 | `TASKS_TEMPLATE_DEBUG` | directory of templates that win over the embedded ones | unset |
 | `TASKS_BOOTSTRAP_IDENTITY` | account to create and grant the task groups to | unset |
 | `TASKS_BOOTSTRAP_PASSWORD` | password for that account, required with the identity | unset |
 | `AUTHWARE_SESSION_KEY` | session signing key, 32+ bytes | required in production |
 | `AUTHWARE_SESSION_LIFETIME` | session lifetime | `1h` |
+
+### Switching theme
+
+The example links the alternative theme, so its appearance is configuration:
+
+```sh
+make generate          # vendors the theme's stylesheet, once per clone
+TASKS_THEME=bulma TASKS_BOOTSTRAP_IDENTITY=ada TASKS_BOOTSTRAP_PASSWORD=... \
+  go run ./examples/tasks
+```
+
+No template in this directory mentions a theme. They all extend
+`@core/base.p2`, which is the framework's own name for its base layout, and a
+theme is mounted *as* that name rather than in front of it, so the layout, the
+navbar, the login page and the error pages all change while `list.p2` does not
+move. That is the whole point of the mechanism, and `theme_test.go` is the test
+that says so.
+
+The vendored stylesheet is generated rather than committed, which is why a fresh
+clone needs `make generate` before it builds. `theme/bulma/bulma.lock` pins the
+release and its digests; the generator refuses to write anything that does not
+match them.
+
+One consequence is worth stating plainly, because it is the one that bites:
+`static/css/tasks.css` declares its own custom properties and its own button
+modifiers. The framework publishes no CSS variables for an application to
+borrow, because a variable some theme defined is a value that disappears when
+the theme changes, and a stylesheet whose colours fall back to transparent looks
+perfectly correct in the one theme it was written against.
 
 ### PostgreSQL
 
