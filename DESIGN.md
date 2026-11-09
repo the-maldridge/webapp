@@ -75,21 +75,23 @@ chain by default and an application appends or replaces the set with options; se
 ## 3. Package layout
 
 ```
-webapp/            App, options, config, router, middleware, render funnel, errors, input handling, nav, static, modules
-webapp/db/         driver selection, pooling, pragmas, AutoMigrate + versioned migrations, upsert, paging
-webapp/auth/       service, mechanism chain, hardened cookies, CSRF, permissions, guards, login handlers
-webapp/tmpl/       namespaced multi-loader, shared context, error adaptation, filters
-webapp/ui/         embedded core UI: base and login templates, error pages, nav fragment, static assets
-webapp/webapptest/ test applications: disposable database, real auth, handler-driven client
-webapp/testas/     identity stamped onto a request, for handlers tested alone
-examples/tasks/    a complete application built on the framework
+webapp/                App, options, config, router, middleware, render funnel, errors, input handling, nav, static, modules
+webapp/db/             driver selection, pooling, pragmas, AutoMigrate + versioned migrations, upsert, paging
+webapp/auth/           service, mechanism chain, hardened cookies, CSRF, permissions, guards, login handlers
+webapp/tmpl/           namespaced multi-loader, shared context, error adaptation, filters
+webapp/theme/builtin/  default theme: base and login templates, error pages, nav fragment, static assets
+webapp/theme/bulma/    optional theme: the same templates in Bulma's markup, plus a vendored bundle
+webapp/webapptest/     test applications: disposable database, real auth, handler-driven client
+webapp/testas/         identity stamped onto a request, for handlers tested alone
+webapp/internal/       test-only code shared between the core and the themes
+examples/tasks/        a complete application built on the framework
 ```
 
-Dependency direction is strictly inward: `webapp` may import `db`, `auth`, `tmpl`, and `ui`;
-none of those import `webapp`. Applications import `webapp` plus whichever of the subpackages
-they need directly. `webapptest` and `testas` are the leaves: they import `webapp` and nothing
-imports them, which is what lets a test helper reach an installed service without the framework
-knowing tests exist.
+Dependency direction is strictly inward: `webapp` may import `db`, `auth`, `tmpl`, and
+`theme/builtin`; none of those import `webapp`. Applications import `webapp` plus whichever of the
+subpackages they need directly. `webapptest`, `testas`, and every theme other than the default are
+the leaves: they import `webapp` and nothing imports them, which is what lets a test helper reach
+an installed service, and a theme register itself, without the framework knowing either exists.
 
 ## 4. Application surface
 
@@ -206,15 +208,17 @@ The consequence for applications: `{% extends "base.p2" %}` and
 template was embedded from. Names that climb out of a mounted root are clamped to it, so a
 template cannot reference a file that was never a template.
 
-### 5.2 Core UI and the compile check
+### 5.2 Themes and the compile check
 
-`webapp/ui` is its own package because embedding requires a package: the directory some package
-embeds has to be a directory in the source tree, and the alternative is the framework's
-presentation files living inside the application core. It ships the base layout, the login page,
-the navigation fragment, the three error pages, and the framework stylesheet.
+The framework renders a handful of pages itself: the base layout, the login page, the navigation
+fragment, and the three error pages. `theme/builtin` is the package that supplies them by default,
+and it is a package because embedding requires one — the directory some package embeds has to be a
+directory in the source tree, and the alternative is the framework's presentation files living
+inside the application core.
 
-`ui.Required` lists the templates the framework renders itself. At startup they are compiled
-through `Renderer.Verify`, and a missing or unparseable entry fails construction:
+`ThemeInfo.Required` lists the templates the framework renders itself. Whichever theme is active,
+they are compiled through `Renderer.Verify` at startup and a missing or unparseable entry fails
+construction:
 
 ```
 @core/base.p2  @core/login.p2  @core/fragments/nav.p2
@@ -227,10 +231,40 @@ would make the framework's compile check pass while the framework still could no
 failures. An error template is rendered only when something has already gone wrong, which is the
 worst possible moment to discover it is broken and the least likely moment to investigate it.
 
-Themes work by mounting a root *ahead of* core, so a theme provides only the templates it wants
-to override. Because the framework references its own files as `@core/...`, an application can
-replace the login page and cannot replace the framework's error page — a distinction that matters
-because the error page is what runs when the application is the thing that is broken.
+A theme is mounted *as* core rather than ahead of it. That is a change from the original design,
+which described themes as mounting a root in front of the framework's own, and the reason is that
+the mechanism it described could not work: absolute names resolve inside exactly one namespace
+with no fallback (§5.1), so a second mounted root holding a different `base.p2` is invisible to
+every template that asks for `@core/base.p2`. Substitution is what makes the theme's base layout
+the one the framework's error pages extend, and the visible consequence is that an application's
+own templates — which extend `@core/base.p2` because that is how they reach the framework's layout
+— change appearance when the theme changes, without any of them being edited.
+
+The cost of substitution is that a theme is all-or-nothing, and the check above is what makes that
+safe rather than merely strict. A theme cannot supply a pretty login page and leave the error pages
+to the default, because there is no default left to fall back to; it is refused at startup unless
+it supplies all seven and they all compile. So the guarantee about the error page changes shape.
+An application still cannot replace the framework's error page: `core` is a reserved namespace, an
+application's templates arrive in their own, and no amount of application markup redirects a
+framework render. A theme can, because a theme *is* what renders it — and cannot ship a half-empty
+one, because construction fails first.
+
+Selecting a theme is a name, not a path: `WithTheme` or `<PREFIX>_THEME`. The name has to match a
+registered theme, and a theme outside the framework's own registers itself from its package's
+`init`, which means the application imported it. A name matching nothing is a construction error
+listing what is available, never a quiet fall back to the default, because a deployment that
+believes it is serving a theme and is not has produced the visual defect no test notices and every
+user does. The assets follow the same resolution: the active theme's static tree is served below
+`/static/core`, so a theme's stylesheet URL is a stable shape and a template never mentions which
+theme produced the page it is on.
+
+Because a theme owns its base layout, it owns its markup entirely. Bulma expects
+`.field > .label + .control`; the default theme's login form writes `<label class="field">`. No
+amount of vendored CSS reconciles the two, so a theme is a rewrite in the target framework's idiom
+rather than the default markup with a stylesheet bolted on, and the framework's own class names are
+not part of what a theme must preserve. What a theme must preserve is behaviour, which is the part
+that is not styling: the CSRF field, the password that is never repopulated, and the single failure
+message that does not say which half of the credentials was wrong.
 
 ### 5.3 Debug mode
 
@@ -671,10 +705,11 @@ request path, is what marks the active item without any handler declaring which 
 
 ### 8.5 Static assets
 
-The framework's own assets ship embedded and are served at `/static/core/`. A module's are served
-at `/static/<namespace>/`, which is what lets two modules ship `app.css` without either
-overwriting the other; a namespace is validated at startup against the framework's, and templates
-and assets may share a name because they are different address spaces.
+The active theme's assets ship embedded and are served at `/static/core/`, which is what lets a
+template link its stylesheet without knowing which theme it is on. A module's are served at
+`/static/<namespace>/`, which is what lets two modules ship `app.css` without either overwriting
+the other; a namespace is validated at startup against the framework's, and templates and assets
+may share a name because they are different address spaces.
 
 Embedded files have no modification time, so the file server has no validator to offer and a
 browser re-downloads a stylesheet forever. The framework therefore fingerprints each asset tree at
@@ -684,7 +719,24 @@ and `ModuleAsset` stamp the URL with the build version so a browser that cached 
 deploy asks again. Query-parameter stamping rather than filename rewriting because the assets are
 embedded: there is no build step in which `app.a4f3c1.css` could be produced.
 
-Not yet implemented: vendoring third-party CSS/JS through `go:generate`.
+Third-party CSS is vendored through `go:generate` rather than committed. `theme/bulma` carries a
+`bulma.lock` naming a release and the SHA-256 of both the tarball and each file taken from it, and
+its generator refuses to write anything whose digest does not match. The lock is the only record of
+the version, so there is no constant in the generator that could drift from the file it verifies;
+`-check` reports whether what is on disk is what the lock says without fetching anything. A digest
+mismatch is fatal rather than a warning because the failure it is guarding is specific: an artifact
+at a registry that is not the one reviewed, served to every application that embeds the theme. The
+bundle's licence is fetched alongside it for the same reason the code is upstream's; the templates
+are this repository's own work and the stylesheet is not.
+
+The consequence of a generated bundle is that a fresh clone cannot build until `go generate` has
+run. The Makefile's default target orders the two, and the theme's tests skip with the command to
+run rather than failing with a build error in a package the engineer did not touch.
+
+The framework publishes no CSS custom properties for an application to consume. Its default theme
+declares the variables it uses, but they are that theme's private business, in the same way its
+class names are: borrowing them means the page picks its colours from whichever theme is loaded,
+which looks correct in exactly one of them. An application's stylesheet declares its own.
 
 
 ## 9. Modules
@@ -931,6 +983,7 @@ TASKS_DB_DSN          postgres DSN                    required for postgres
 TASKS_COOKIE_SECURE   Secure cookie attribute         true unless TASKS_DEBUG
 TASKS_SCOPE           deployment role this process serves  unset (all roles)
 TASKS_MODULES         enabled optional modules        all
+TASKS_THEME           templates the framework renders builtin
 AUTHWARE_SESSION_KEY  session signing key             required in production
 AUTHWARE_SESSION_LIFETIME session lifetime            1h
 ```
@@ -971,7 +1024,7 @@ a documented recommendation.
 | Session cookie missing `Secure` / `SameSite` | hardened issuance, configurable for proxied TLS |
 | Session key generated per process, so sessions die on restart or multiply replicas | boot failure in production without an explicit key |
 | No panic recovery; one bad request resets a connection or takes down the process | global `Recoverer` with stack logging |
-| Error templates referenced but never written | core UI owns them; startup compiles the required set |
+| Error templates referenced but never written | the theme owns them; startup compiles the required set |
 | No request logging or correlation IDs | `RequestID` plus a slog request logger |
 | No `http.Server` timeouts | `WithTimeouts` with non-zero defaults |
 | SQLite without WAL, busy timeout, or foreign keys | DSN pragmas applied unconditionally |
@@ -1063,6 +1116,11 @@ which are built.
    depending on one.
 
 Closed since the design was written:
+
+- ~~Whether themes are a thin overlay over vendored CSS or a rewrite.~~ A rewrite. A theme owns the
+  markup, and the vendored CSS only provides it: Bulma wants `.field > .label + .control`, the
+  default theme's login form writes `<label class="field">`, and no stylesheet reconciles the two.
+  What the framework guarantees about those pages is behaviour, not class names.
 
 - ~~`HandlerErr` adds a second handler shape.~~ Built, and both shapes exist with `HandlerErr`
   recommended. The cost turned out to be lower than expected: `WrapErr` converts in one direction,
