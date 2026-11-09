@@ -733,6 +733,22 @@ The consequence of a generated bundle is that a fresh clone cannot build until `
 run. The Makefile's default target orders the two, and the theme's tests skip with the command to
 run rather than failing with a build error in a package the engineer did not touch.
 
+That consequence reaches further than a fresh clone of this repository, and the difference matters.
+`go generate` is a main-module operation: it runs over the packages of the module being built and
+refuses every package belonging to a dependency, which is what it prints when asked otherwise. An
+application that imports this one as a library therefore cannot run the generator at all, and cannot
+obtain the bundle by any route it controls, because an `internal/` package is not importable from
+outside the module that contains it. The generated file has to already be in the module when it is
+compiled. In other words the bundle is committed-by-checkout inside this repository and
+absent-by-default everywhere else, and the only defence available is to make the second case refuse
+to start rather than serve an unstyled page. So the framework reads the active theme's base layout at
+startup and checks every asset it links against the theme's own asset tree, in the same place it
+already compiles the theme's required templates. A theme built without its vendored stylesheet is a
+construction error naming the theme and the missing path, which is the whole reason the check exists:
+the alternative is a deployment that answers 200 on every page, is visibly unstyled, and reports
+nothing about it in any log line, and the first thing anyone inspects when that happens is the
+templates, which are correct.
+
 The framework publishes no CSS custom properties for an application to consume. Its default theme
 declares the variables it uses, but they are that theme's private business, in the same way its
 class names are: borrowing them means the page picks its colours from whichever theme is loaded,

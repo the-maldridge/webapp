@@ -203,6 +203,9 @@ func (a *App) installTemplates() error {
 	if err := render.Verify(a.theme.Required...); err != nil {
 		return fmt.Errorf("webapp: theme %q cannot serve without its templates: %w", a.theme.Name, err)
 	}
+	if err := a.verifyThemeAssets(); err != nil {
+		return err
+	}
 
 	a.Renderer = &templateRenderer{inner: render}
 	a.SetErrorPage(a.renderErrorPage)

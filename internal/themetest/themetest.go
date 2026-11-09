@@ -16,11 +16,11 @@ package themetest
 import (
 	"io/fs"
 	"path"
-	"regexp"
 	"sort"
 	"strings"
 	"testing"
 
+	"github.com/the-maldridge/webapp/internal/themeassets"
 	"github.com/the-maldridge/webapp/tmpl"
 )
 
@@ -36,11 +36,6 @@ const Namespace = "core"
 var Excused = map[string]bool{
 	"errors/base.p2": true,
 }
-
-// assetRe finds the assets a base layout loads from the framework's static root,
-// whether as a stylesheet or as a script. The capture group is the URL, so the
-// attribute name does not have to be stripped off the result afterwards.
-var assetRe = regexp.MustCompile(`(?:href|src)="(` + regexp.QuoteMeta("/static/"+Namespace) + `/[^"]+)"`)
 
 // Check runs every contract rule against one theme and reports each failure with
 // the theme's name, so a suite covering several themes names the offender rather
@@ -191,6 +186,10 @@ func checkNothingUnverified(t *testing.T, name string, tree fs.FS, required []st
 // page that renders perfectly and is unstyled. The check reads the layout rather
 // than a hardcoded filename precisely so that a theme may organize its own assets
 // as it likes.
+//
+// The core applies the same lookup at startup, over the shared package below, so
+// a theme cannot pass here and be refused in somebody's application, or the other
+// way round.
 func checkStylesheets(t *testing.T, name string, tree fs.FS, static fs.FS) {
 	t.Helper()
 
@@ -201,20 +200,16 @@ func checkStylesheets(t *testing.T, name string, tree fs.FS, static fs.FS) {
 	}
 
 	prefix := "/static/" + Namespace + "/"
-	links := assetRe.FindAllStringSubmatch(string(src), -1)
+	links := themeassets.Links(string(src), prefix)
 	if len(links) == 0 {
-		t.Errorf("theme %q's base.p2 loads no asset below /static/%s/; a theme is expected to "+
+		t.Errorf("theme %q's base.p2 loads no asset below %s; a theme is expected to "+
 			"provide its own styling, and a page that ships unstyled by accident is indistinguishable "+
-			"from one that does it on purpose", name, Namespace)
+			"from one that does it on purpose", name, prefix)
 		return
 	}
 
-	for _, match := range links {
-		target := match[1]
-		// A query string is a cache stamp, not part of the filename.
-		target, _, _ = strings.Cut(target, "?")
-		rel := strings.TrimPrefix(target, prefix)
-		if _, err := fs.Stat(static, rel); err != nil {
+	for _, target := range links {
+		if _, err := fs.Stat(static, strings.TrimPrefix(target, prefix)); err != nil {
 			t.Errorf("theme %q's base.p2 loads %q, which its asset tree does not contain (%v); "+
 				"if the bundle is generated rather than committed, run go generate ./...", name, target, err)
 		}

@@ -13,6 +13,12 @@ The stylesheet is fetched by `go generate` rather than committed, and verified
 against the digests in bulma.lock; see DESIGN.md §8.5 for why the digests are
 fatal rather than advisory. Importing this package registers the theme, after
 which WithTheme("bulma") or <PREFIX>_THEME=bulma selects it.
+
+Generating that stylesheet is only possible from inside this module, because
+go generate refuses packages belonging to a dependency. An application that
+imports this one as a library therefore cannot produce it, so selecting this
+theme from such an application fails at construction with a message saying so,
+rather than serving every page unstyled. See DESIGN.md §8.5.
 */
 package bulma
 

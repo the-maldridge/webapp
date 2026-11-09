@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"path"
 	"strings"
+
+	"github.com/the-maldridge/webapp/internal/themeassets"
 )
 
 // Static assets.
@@ -58,6 +60,60 @@ func (a *App) installStatic() {
 		a.Mount(prefix, staticHandler(prefix, mod.fsys))
 	}
 }
+
+// themeLayout is the base layout whose asset links are checked at startup. It is
+// also the first entry of every theme's Required set, which is what makes it safe
+// to read here: the template check that precedes this one has already proved it
+// exists and compiles.
+const themeLayout = "base.p2"
+
+// verifyThemeAssets confirms every asset the active theme's base layout loads is
+// actually in the tree installStatic mounted.
+//
+// The template half of a theme is verified at startup and its asset half was not,
+// which left exactly one failure mode open and made it invisible: a theme whose
+// stylesheet is generated rather than committed produces a binary in which every
+// page answers 200, renders correct markup, and is unstyled, because the link in
+// the layout resolves to a route with no file behind it. Nothing in the response
+// distinguishes that from a theme that shipped no stylesheet on purpose. Nobody
+// discovers it from a log line; they discover it from a screenshot, and by then
+// the first thing anyone inspects is the templates, which are fine.
+//
+// The check reads the layout rather than a list of filenames because a theme owns
+// its own assets, so the layout is the only thing that knows what a given theme
+// needs. It is a construction error rather than a log warning for the same reason
+// Required is one: the alternative is a deployment that reports itself healthy
+// while serving an unstyled page, and "it started" is the wrong signal to look
+// for.
+func (a *App) verifyThemeAssets() error {
+	static := a.theme.Static()
+	if static == nil {
+		// An empty tree rather than nil, so that a theme linking a stylesheet from
+		// a tree it never provided reports the missing file instead of nothing.
+		static = emptyStatic{}
+	}
+
+	missing, err := themeassets.Missing(a.theme.FS(), static, themeLayout, StaticRoot+"/")
+	if err != nil {
+		// Not fatal on its own: the required-template check has already refused a
+		// theme with no base layout, and says so more precisely than this can.
+		return nil
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("webapp: theme %q was built without %s, which its base layout links, so every "+
+		"page it renders would answer 200 unstyled. That file is generated rather than committed, and "+
+		"go generate runs only inside the module that owns it: run it there and rebuild, vendor the "+
+		"file into this build some other way, or select another theme",
+		a.theme.Name, strings.Join(missing, ", "))
+}
+
+// emptyStatic is an asset tree with nothing in it.
+type emptyStatic struct{}
+
+// Open always reports the file is absent.
+func (emptyStatic) Open(string) (fs.File, error) { return nil, fs.ErrNotExist }
 
 // staticHandler serves an asset tree mounted at prefix.
 //

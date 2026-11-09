@@ -325,6 +325,107 @@ func TestThemeStaticServedUnderFrameworkRoot(t *testing.T) {
 	}
 }
 
+// TestThemeMissingAssetFailsConstruction covers the half of a theme that the
+// required-template check cannot see: a layout linking an asset its tree does not
+// contain.
+//
+// This is the failure a theme whose stylesheet is generated rather than committed
+// produces for anyone who imports it, and before this check it was invisible:
+// every page answered 200, the markup was correct, and the document was unstyled.
+// A construction error is the only signal available, because the response itself
+// does not distinguish an unstyled page from a theme that shipped no stylesheet.
+func TestThemeMissingAssetFailsConstruction(t *testing.T) {
+	withCleanThemeRegistry(t)
+
+	files := minimalThemeFiles()
+	files["base.p2"] = `<html><head>
+<link rel="stylesheet" href="/static/core/css/generated.min.css">
+</head><body>{% block content %}{% endblock %}</body></html>`
+
+	info := testTheme("ungenerated", files)
+	RegisterTheme(info)
+
+	_, err := newTestAppNoBuild(t, WithTheme("ungenerated"))
+	if err == nil {
+		t.Fatal("a theme whose layout links an asset it does not ship was accepted; " +
+			"every page would render unstyled while reporting itself healthy")
+	}
+	for _, want := range []string{"ungenerated", "/static/core/css/generated.min.css", "go generate"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error should name %q so the operator knows what is missing and which theme "+
+				"omitted it, got: %v", want, err)
+		}
+	}
+}
+
+// TestThemeAssetWithCacheStampResolves covers the query string a stamped URL
+// carries. A check that treated the stamp as part of the filename would refuse
+// every correctly stamped theme, which is a worse defect than the one it guards
+// because it cannot be worked around.
+func TestThemeAssetWithCacheStampResolves(t *testing.T) {
+	withCleanThemeRegistry(t)
+
+	files := minimalThemeFiles()
+	files["base.p2"] = `<html><head>
+<link rel="stylesheet" href="/static/core/css/theme.css?v=1.2.3">
+</head><body>{% block content %}{% endblock %}</body></html>`
+
+	info := testTheme("stamped", files)
+	info.Static = func() fs.FS {
+		return mapFS(map[string]string{"css/theme.css": "body{}"})
+	}
+	RegisterTheme(info)
+
+	if _, err := newTestAppNoBuild(t, WithTheme("stamped")); err != nil {
+		t.Errorf("a theme whose asset link carries a cache stamp was refused: %v", err)
+	}
+}
+
+// TestThemeWithoutStylesheetIsAccepted states the other half of the rule: a theme
+// that ships no assets and links none is a decision, not a defect. Refusing it
+// would make a minimal theme impossible, and a theme that deliberately inherits
+// its application's styling is legitimate.
+func TestThemeWithoutStylesheetIsAccepted(t *testing.T) {
+	withCleanThemeRegistry(t)
+
+	info := testTheme("bare", minimalThemeFiles())
+	info.Static = func() fs.FS { return nil }
+	RegisterTheme(info)
+
+	if _, err := newTestAppNoBuild(t, WithTheme("bare")); err != nil {
+		t.Errorf("a theme with no stylesheet and no asset links was refused: %v", err)
+	}
+}
+
+// TestThemeNilStaticWithLinksFails covers the combination that would otherwise
+// dereference a nil filesystem: a theme returning no asset tree at all while its
+// layout links from it.
+//
+// The distinction matters because "returns nil" is legal and means nothing to
+// serve, whereas the layout asking for a file from nothing is the same defect as
+// a missing file, and must produce the same error rather than a panic in
+// somebody's startup.
+func TestThemeNilStaticWithLinksFails(t *testing.T) {
+	withCleanThemeRegistry(t)
+
+	files := minimalThemeFiles()
+	files["base.p2"] = `<html><head>
+<link rel="stylesheet" href="/static/core/css/theme.css">
+</head><body>{% block content %}{% endblock %}</body></html>`
+
+	info := testTheme("nostatic", files)
+	info.Static = func() fs.FS { return nil }
+	RegisterTheme(info)
+
+	_, err := newTestAppNoBuild(t, WithTheme("nostatic"))
+	if err == nil {
+		t.Fatal("a theme linking a stylesheet from a tree it does not provide was accepted")
+	}
+	if !strings.Contains(err.Error(), "/static/core/css/theme.css") {
+		t.Errorf("the error should name the missing asset, got: %v", err)
+	}
+}
+
 // TestReservedThemeNamesRejected covers the names that would make a template
 // resolve differently than it was written.
 func TestReservedThemeNamesRejected(t *testing.T) {
