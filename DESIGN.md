@@ -79,12 +79,12 @@ webapp/                App, options, config, router, middleware, render funnel, 
 webapp/db/             driver selection, pooling, pragmas, AutoMigrate + versioned migrations, upsert, paging
 webapp/auth/           service, mechanism chain, hardened cookies, CSRF, permissions, guards, login handlers
 webapp/tmpl/           namespaced multi-loader, shared context, error adaptation, filters
+webapp/themetest/      the theme contract, runnable from a theme's own test suite
 webapp/theme/builtin/  default theme: base and login templates, error pages, nav fragment, static assets
-webapp/theme/bulma/    optional theme: the same templates in Bulma's markup, plus a vendored bundle
 webapp/webapptest/     test applications: disposable database, real auth, handler-driven client
 webapp/testas/         identity stamped onto a request, for handlers tested alone
-webapp/internal/       test-only code shared between the core and the themes
-examples/tasks/        a complete application built on the framework
+webapp/internal/       code shared between the core and its own default theme
+examples/tasks/        a complete application built on the framework, in its own module
 ```
 
 Dependency direction is strictly inward: `webapp` may import `db`, `auth`, `tmpl`, and
@@ -92,6 +92,14 @@ Dependency direction is strictly inward: `webapp` may import `db`, `auth`, `tmpl
 subpackages they need directly. `webapptest`, `testas`, and every theme other than the default are
 the leaves: they import `webapp` and nothing imports them, which is what lets a test helper reach
 an installed service, and a theme register itself, without the framework knowing either exists.
+
+A theme is not required to live in this repository, and the Bulma theme does not: it is
+`github.com/the-maldridge/webapp-bulma`, a separate module adjacent to this one on disk, importing
+`webapp` for `RegisterTheme` and `RequiredTemplates` and importing `webapp/themetest` to run the
+contract over itself. That direction is legal precisely because the leaf rule above already holds:
+the framework imports no theme but its own default. The example application is in its own module for
+the same reason one layer out, since it depends on a theme that depends on the framework, and an
+example inside the framework's module would close that graph into a cycle between two modules.
 
 ## 4. Application surface
 
@@ -777,35 +785,36 @@ and `ModuleAsset` stamp the URL with the build version so a browser that cached 
 deploy asks again. Query-parameter stamping rather than filename rewriting because the assets are
 embedded: there is no build step in which `app.a4f3c1.css` could be produced.
 
-Third-party CSS is vendored through `go:generate` rather than committed. `theme/bulma` carries a
-`bulma.lock` naming a release and the SHA-256 of both the tarball and each file taken from it, and
-its generator refuses to write anything whose digest does not match. The lock is the only record of
-the version, so there is no constant in the generator that could drift from the file it verifies;
-`-check` reports whether what is on disk is what the lock says without fetching anything. A digest
-mismatch is fatal rather than a warning because the failure it is guarding is specific: an artifact
-at a registry that is not the one reviewed, served to every application that embeds the theme. The
-bundle's licence is fetched alongside it for the same reason the code is upstream's; the templates
-are this repository's own work and the stylesheet is not.
+Third-party CSS is committed by the theme that vendors it. The Bulma theme, which is where any of
+this framework's CSS comes from, is a separate module and keeps `bulma.min.css` and its licence in
+its own repository. That was not the original arrangement, and the reason it changed is worth
+recording because the failure was silent.
 
-The consequence of a generated bundle is that a fresh clone cannot build until `go generate` has
-run. The Makefile's default target orders the two, and the theme's tests skip with the command to
-run rather than failing with a build error in a package the engineer did not touch.
+The bundle used to be fetched by `go:generate`, verified against a `bulma.lock` naming a release and
+the SHA-256 of both the tarball and each file taken from it, with the generator refusing to write
+anything whose digest did not match. The lock was the only record of the version, so there was no
+constant that could drift from the file it verified, and `-check` answered whether what was on disk
+was what the lock said without fetching anything. A digest mismatch was fatal rather than a warning
+because the failure it guarded was specific: an artifact at a registry that is not the one reviewed,
+served to every application that embeds the theme. All of that remains true and the mechanism moved
+with the theme.
 
-That consequence reaches further than a fresh clone of this repository, and the difference matters.
-`go generate` is a main-module operation: it runs over the packages of the module being built and
-refuses every package belonging to a dependency, which is what it prints when asked otherwise. An
-application that imports this one as a library therefore cannot run the generator at all, and cannot
-obtain the bundle by any route it controls, because an `internal/` package is not importable from
-outside the module that contains it. The generated file has to already be in the module when it is
-compiled. In other words the bundle is committed-by-checkout inside this repository and
-absent-by-default everywhere else, and the only defence available is to make the second case refuse
-to start rather than serve an unstyled page. So the framework reads the active theme's base layout at
-startup and checks every asset it links against the theme's own asset tree, in the same place it
-already compiles the theme's required templates. A theme built without its vendored stylesheet is a
-construction error naming the theme and the missing path, which is the whole reason the check exists:
-the alternative is a deployment that answers 200 on every page, is visibly unstyled, and reports
-nothing about it in any log line, and the first thing anyone inspects when that happens is the
-templates, which are correct.
+What did not survive was the conclusion that a generated bundle can be the arrangement at all. `go
+generate` is a main-module operation: it runs over the packages of the module being built and refuses
+every package belonging to a dependency. An application that imported the framework as a library
+therefore could not run the generator, and could not obtain the bundle by any route it controlled,
+because the fetcher sat under `internal/` and was not importable either. The bundle was
+committed-by-checkout inside this repository and absent-by-default everywhere else, which meant a
+theme could be present, selected, and completely unstyled in exactly the deployments that had done
+nothing wrong. Committing the asset is the fix, and it is also what let the theme leave.
+
+The startup check stays, because a theme can always vendor a generated asset badly, and the failure
+is invisible in every way a rendered page can be inspected. The framework reads the active theme's
+base layout at startup and checks every asset it links against the theme's own asset tree, in the
+same place it already compiles the theme's required templates. A theme missing an asset its layout
+links is a construction error naming the theme and the path. The alternative is a deployment that
+answers 200 on every page, is visibly unstyled, and reports nothing about it in any log line, and the
+first thing anyone inspects when that happens is the templates, which are correct.
 
 The framework publishes no CSS custom properties for an application to consume. Its default theme
 declares the variables it uses, but they are that theme's private business, in the same way its

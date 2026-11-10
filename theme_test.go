@@ -349,9 +349,9 @@ func TestThemeStaticServedUnderFrameworkRoot(t *testing.T) {
 // required-template check cannot see: a layout linking an asset its tree does not
 // contain.
 //
-// This is the failure a theme whose stylesheet is generated rather than committed
-// produces for anyone who imports it, and before this check it was invisible:
-// every page answered 200, the markup was correct, and the document was unstyled.
+// This is the failure a theme that does not ship an asset its layout links produces
+// for anyone who imports it, and before this check it was invisible: every page
+// answered 200, the markup was correct, and the document was unstyled.
 // A construction error is the only signal available, because the response itself
 // does not distinguish an unstyled page from a theme that shipped no stylesheet.
 func TestThemeMissingAssetFailsConstruction(t *testing.T) {
@@ -366,7 +366,7 @@ func TestThemeMissingAssetFailsConstruction(t *testing.T) {
 		t.Fatal("a theme whose layout links an asset it does not ship was accepted; " +
 			"every page would render unstyled while reporting itself healthy")
 	}
-	for _, want := range []string{"ungenerated", "/static/core/css/generated.min.css", "go generate"} {
+	for _, want := range []string{"ungenerated", "/static/core/css/generated.min.css", "select another theme"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the error should name %q so the operator knows what is missing and which theme "+
 				"omitted it, got: %v", want, err)

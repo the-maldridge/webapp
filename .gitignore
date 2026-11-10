@@ -1,11 +1,13 @@
-# The Bulma bundle is vendored by `go generate ./...` rather than committed, so
-# these two paths are build output. theme/bulma/bulma.lock is the committed
-# record of which release and which digests `go generate` expects, and is what
-# makes a regenerated bundle verifiable rather than merely present.
-#
-# The package still compiles without them because theme/bulma/static/js is
-# committed alongside, and `go:embed` has something real to embed. That matters:
-# the alternative is a build error in a package nobody touched, reported instead
-# of the test that says "run go generate".
-theme/bulma/static/css/bulma.min.css
-theme/bulma/static/css/LICENSE
+# A go.work is a property of one engineer's checkout, not of the repository. It
+# names the sibling clones that make a theme build against the framework from
+# source, and a clean clone of this module has no business knowing their paths:
+# without the file, `go build` resolves the published version of the theme, which
+# is the answer a stranger to this checkout wants. Committing it would replace that
+# with "directory not found".
+go.work
+go.work.sum
+
+# Where `make build` puts compiled binaries. -o dist/ is used rather than the
+# default because the example's main package lives in a directory named tasks, and
+# a bare build would collide with it.
+dist/

@@ -2,7 +2,6 @@ package main
 
 import (
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 
@@ -20,15 +19,14 @@ import (
 // that substitution was the right mechanism is this suite passing unchanged under
 // a second theme.
 
-// bulmaBundle is the theme's vendored stylesheet relative to the repository,
-// which is generated rather than committed.
-const bulmaBundle = "../../theme/bulma/static/css/bulma.min.css"
-
 // bulmaApp builds the example rendering with the Bulma theme.
+//
+// Nothing here checks that the theme's stylesheet exists before running. The theme
+// is a module dependency whose bundle is committed, so the bundle is either in the
+// binary or the build failed; the assertion worth making is the HTTP one further
+// down, that the framework actually serves it.
 func bulmaApp(t *testing.T) *webapptest.App {
 	t.Helper()
-
-	requireBundle(t)
 
 	a := webapptest.NewApp(t, webapp.WithTheme("bulma"))
 	a.InstallAuth()
@@ -136,14 +134,5 @@ func TestUnknownThemeIsRefused(t *testing.T) {
 		t.Fatal("constructing with an unregistered theme succeeded")
 	} else if !strings.Contains(err.Error(), "builtin") {
 		t.Errorf("the error does not name what is available: %v", err)
-	}
-}
-
-// requireBundle skips unless the generated bundle is present.
-func requireBundle(t *testing.T) {
-	t.Helper()
-
-	if _, err := os.Stat(bulmaBundle); err != nil {
-		t.Skipf("the alternative theme's stylesheet is not generated (%v); run go generate ./...", err)
 	}
 }

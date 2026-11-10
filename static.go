@@ -102,10 +102,9 @@ func (a *App) verifyThemeAssets() error {
 	if len(missing) == 0 {
 		return nil
 	}
-	return fmt.Errorf("webapp: theme %q was built without %s, which its base layout links, so every "+
-		"page it renders would answer 200 unstyled. That file is generated rather than committed, and "+
-		"go generate runs only inside the module that owns it: run it there and rebuild, vendor the "+
-		"file into this build some other way, or select another theme",
+	return fmt.Errorf("webapp: theme %q is missing %s, which its base layout links, so every page it "+
+		"renders would answer 200 unstyled. Rebuild with the theme's assets present, or select another "+
+		"theme",
 		a.theme.Name, strings.Join(missing, ", "))
 }
 

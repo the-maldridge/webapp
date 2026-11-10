@@ -157,6 +157,11 @@
 // webapp as a dependency; nothing about writing a theme requires this
 // repository.
 //
+// github.com/the-maldridge/webapp-bulma is that, in the wild: a theme in its
+// own module, adjacent to this one, importing webapp rather than living inside
+// it. Its bundle is committed, which is what makes it usable from an
+// application that imports it, and its own test suite runs themetest.Check.
+//
 // What construction checks, and why each one is there:
 //
 //	Templates. Every page the framework renders itself must exist and compile.
@@ -174,10 +179,10 @@
 //
 //	Assets. A layout's stylesheet link resolves under /static/core, and the
 //	   file has to be in the binary, so construction reads the layout and
-//	   refuses a theme whose links do not resolve. A theme that vendors a
-//	   generated asset has to ship it, because go generate runs only in the
-//	   module that owns the package: an application importing the theme has no
-//	   way to produce what the theme did not commit.
+//	   refuses a theme whose links do not resolve. A theme that vendors an
+//	   asset has to commit it: an application importing the theme has no way
+//	   to produce what the theme did not ship, because go generate runs only
+//	   in the module that owns the package.
 //
 // Two things remain the theme's own responsibility, because the framework
 // genuinely cannot check them:

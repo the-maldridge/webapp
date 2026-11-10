@@ -9,13 +9,14 @@
 //
 // # Running it
 //
-//	go run ./examples/tasks
+//	cd examples
+//	go run ./tasks
 //
 // The first boot with no accounts has to be told who the first account is:
 //
 //	TASKS_BOOTSTRAP_IDENTITY=ada \
 //	TASKS_BOOTSTRAP_PASSWORD=choose-something-long \
-//	  go run ./examples/tasks
+//	  go run ./tasks
 //
 // Then open http://localhost:8080 and sign in. See README.md for the rest of the
 // configuration, including how to run it against PostgreSQL.
@@ -40,7 +41,11 @@ import (
 	// stylesheet that was never compiled into the binary. Importing it is the whole
 	// of what installing a theme is, so switching the example's appearance is a
 	// build decision and not something that can be asked for by accident.
-	_ "github.com/the-maldridge/webapp/theme/bulma"
+	//
+	// The theme is a separate repository, which is the point this example makes by
+	// existing: nothing in the example knows or cares that the layout rendering it
+	// came from somewhere other than the framework's own module.
+	_ "github.com/the-maldridge/webapp-bulma"
 )
 
 // EnvBootstrapIdentity and EnvBootstrapPassword name the account the first boot

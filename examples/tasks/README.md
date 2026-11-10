@@ -4,10 +4,17 @@ A task list built on the `webapp` framework. It is the example application in
 DESIGN.md §13: small enough to read in one sitting, and it uses every layer of
 the framework the way a real application does rather than the way a snippet does.
 
+This directory is its own Go module, `github.com/the-maldridge/webapp/examples`,
+so commands are run from `examples/`, not from the repository root. It is a
+module rather than a package inside the framework because it imports a theme that
+imports the framework; as a package of the framework's own module that theme
+would have to be imported by the framework to be reachable, which is a cycle.
+
 ## Run it
 
 ```sh
-go run ./examples/tasks
+cd examples
+go run ./tasks
 ```
 
 Open <http://localhost:8080>.
@@ -15,9 +22,10 @@ Open <http://localhost:8080>.
 The first boot has no accounts, so tell it who the first one is:
 
 ```sh
+cd examples
 TASKS_BOOTSTRAP_IDENTITY=ada \
 TASKS_BOOTSTRAP_PASSWORD=choose-something-long \
-  go run ./examples/tasks
+  go run ./tasks
 ```
 
 Sign in as `ada`. That account is given the `TASKS:VIEW`, `TASKS:EDIT`,
@@ -78,10 +86,15 @@ in DESIGN.md §11; these are the ones this example adds or cares about.
 The example links the alternative theme, so its appearance is configuration:
 
 ```sh
-make generate          # vendors the theme's stylesheet, once per clone
+cd examples
 TASKS_THEME=bulma TASKS_BOOTSTRAP_IDENTITY=ada TASKS_BOOTSTRAP_PASSWORD=... \
-  go run ./examples/tasks
+  go run ./tasks
 ```
+
+The theme is `github.com/the-maldridge/webapp-bulma`, a separate repository
+imported by `main.go` with a blank import, which is exactly what an application
+outside this repository would do. Its stylesheet is committed, so there is
+nothing to generate before the example runs.
 
 No template in this directory mentions a theme. They all extend
 `@core/base.p2`, which is the framework's own name for its base layout, and a
@@ -89,11 +102,6 @@ theme is mounted *as* that name rather than in front of it, so the layout, the
 navbar, the login page and the error pages all change while `list.p2` does not
 move. That is the whole point of the mechanism, and `theme_test.go` is the test
 that says so.
-
-The vendored stylesheet is generated rather than committed, which is why a fresh
-clone needs `make generate` before it builds. `theme/bulma/bulma.lock` pins the
-release and its digests; the generator refuses to write anything that does not
-match them.
 
 One consequence is worth stating plainly, because it is the one that bites:
 `static/css/tasks.css` declares its own custom properties and its own button
@@ -108,7 +116,7 @@ The application code is identical. Only the environment changes:
 
 ```sh
 TASKS_DB_DSN='postgres://user:pass@localhost:5432/tasks?sslmode=disable' \
-  go run ./examples/tasks
+  go run ./tasks
 ```
 
 Both drivers are worth trying at least once, because they disagree about the one
@@ -143,7 +151,7 @@ nothing outside the module referenced it. The application's own front door at
 ### Edit templates without rebuilding
 
 ```sh
-TASKS_DEBUG=1 TASKS_TEMPLATE_DEBUG=./examples/tasks/p2 go run ./examples/tasks
+TASKS_DEBUG=1 TASKS_TEMPLATE_DEBUG=./tasks/p2 go run ./tasks
 ```
 
 Names in that directory win over the embedded copies and are re-read on every
@@ -154,7 +162,8 @@ of the templates inside a deployed binary is a code-execution surface.
 ## Tests
 
 ```sh
-CGO_ENABLED=1 go test ./examples/tasks
+cd examples
+CGO_ENABLED=1 go test ./tasks
 ```
 
 The suite drives the real handler chain with the real session codec and the real
