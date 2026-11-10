@@ -129,6 +129,71 @@
 // examples/tasks is a worked example of all of this, and its tests are the
 // integration suite the framework does not otherwise have.
 //
+// # Themes
+//
+// A theme is the set of pages the framework renders itself: the base layout,
+// the login form, the navigation fragment, and the three error pages. The
+// active theme is mounted as the framework's own namespace rather than in
+// front of it, so an application's templates, which extend @core/base.p2 to
+// reach the framework's layout, change appearance without any of them being
+// edited.
+//
+// A theme may live anywhere. It is a ThemeInfo value registered from a
+// package's init, and the application pulls it in with a blank import:
+//
+//	func init() {
+//		webapp.RegisterTheme(webapp.ThemeInfo{
+//			Name:     "kite",
+//			FS:       func() fs.FS { return templates },
+//			Static:   func() fs.FS { return assets },
+//			Required: webapp.RequiredTemplates(),
+//		})
+//	}
+//
+// RequiredTemplates is the list the framework renders itself and therefore
+// has to be able to compile, and package webapp/themetest checks a theme
+// against every rule construction applies, from inside the theme's own
+// package, with no application built. Both are usable from a module that has
+// webapp as a dependency; nothing about writing a theme requires this
+// repository.
+//
+// What construction checks, and why each one is there:
+//
+//	Templates. Every page the framework renders itself must exist and compile.
+//	   An error template is rendered only when something has already gone
+//	   wrong, which is the worst moment to discover one is broken and the
+//	   least likely moment to investigate it.
+//
+//	Blocks. A layout must declare every block the framework's templates and an
+//	   application's pages fill: title, head, bodyclass, header, content, and
+//	   footer on the base layout, and detail on the error skeleton. Pongo2
+//	   drops a filled block whose parent never declared it, with no error at
+//	   parse time or render time, so a skeleton missing detail renders three
+//	   error pages with the reason for the failure removed. Nothing else in
+//	   the system notices, including a test that asserts the page renders.
+//
+//	Assets. A layout's stylesheet link resolves under /static/core, and the
+//	   file has to be in the binary, so construction reads the layout and
+//	   refuses a theme whose links do not resolve. A theme that vendors a
+//	   generated asset has to ship it, because go generate runs only in the
+//	   module that owns the package: an application importing the theme has no
+//	   way to produce what the theme did not commit.
+//
+// Two things remain the theme's own responsibility, because the framework
+// genuinely cannot check them:
+//
+//	Filters. A theme may register template filters from init, but pongo2's
+//	   filter registry is one process-global map, so a filter name a theme
+//	   invents can collide with one another package claimed first, and the
+//	   loser finds out at startup. Prefixing the names is cheaper than an
+//	   argument about who owns "truncate".
+//
+//	Behaviour. A theme owns its markup entirely, and the framework cannot
+//	   stop it from redrawing the login form. What a redraw must not lose is
+//	   the CSRF field, the password that is never repopulated, and the single
+//	   failure message that does not reveal which half of the credentials was
+//	   wrong.
+//
 // # Failure handling
 //
 // App.Fail is the single error exit. It always sets an accurate status

@@ -1,16 +1,22 @@
 // Package themetest checks the contract every theme has to satisfy.
 //
-// It is a package rather than a test helper because the checks have to run
-// against a theme twice: once from the core, over every theme that happens to be
-// registered, and once from inside the theme package itself, where a theme is
-// checked without any application being constructed. A theme that only ever ran
-// one of the two would pass while the other found the problem, and the
-// reproduction would depend on which package the engineer happened to test.
+// It is exported and depends only on tmpl and the standard library, so a theme
+// written in its own module can run it. That is the reason it is a package rather
+// than a helper buried in the core's tests: the checks have to run against a theme
+// three ways, over every registered theme from the core, against the default theme
+// from its own package, and against a third party theme from inside that theme's
+// package where no application is constructed at all. A theme that ran only one of
+// the three would pass while another found the problem, and the reproduction would
+// depend on which package the engineer happened to test.
 //
 // The checks exist because a theme replaces the templates the framework renders
 // when something has already gone wrong. A theme missing an error page is not a
 // visual defect, it is a framework that cannot explain a failure, discovered at
 // the worst possible moment by whoever is least able to investigate it.
+//
+// The framework enforces the same rules at startup, through the same lookup, so a
+// theme cannot pass here and be refused in somebody's application, or the other way
+// round.
 package themetest
 
 import (
@@ -21,13 +27,15 @@ import (
 	"testing"
 
 	"github.com/the-maldridge/webapp/internal/themeassets"
+	"github.com/the-maldridge/webapp/internal/themeblocks"
 	"github.com/the-maldridge/webapp/tmpl"
 )
 
-// Namespace is the namespace a theme's required templates are named in. It
-// duplicates the core's unexported constant because a test helper must not drag
-// in the whole core to state a name, and the core's own registry test asserts
-// every theme's entries use the same one, so the two cannot disagree quietly.
+// Namespace is the namespace a theme's required templates are named in, and the
+// namespace the framework mounts the active theme as. It is exported so that a
+// theme in another module can qualify the names it declares rather than writing
+// "@core/" from memory, and the core's own tests assert every registered theme's
+// entries use it, so the two cannot disagree quietly.
 const Namespace = "core"
 
 // Excused lists templates that are shipped but not required, because they are
@@ -59,6 +67,9 @@ func Check(t *testing.T, name string, tree fs.FS, static fs.FS, required []strin
 	})
 	t.Run(name+"/nothing-unverified", func(t *testing.T) {
 		checkNothingUnverified(t, name, tree, required)
+	})
+	t.Run(name+"/blocks-published", func(t *testing.T) {
+		checkBlocks(t, name, tree)
 	})
 	if static != nil {
 		t.Run(name+"/stylesheets-resolve", func(t *testing.T) {
@@ -175,6 +186,26 @@ func checkNothingUnverified(t *testing.T, name string, tree fs.FS, required []st
 		sort.Strings(missing)
 		t.Errorf("theme %q ships templates nothing verifies; add them to Required or to themetest.Excused: %v",
 			name, missing)
+	}
+}
+
+// checkBlocks asserts every framework layout declares the blocks the framework's
+// own templates and an application's templates fill.
+//
+// The failure this catches is one pongo2 cannot report: a child filling a block
+// its parent never declared renders the parent and throws the filled block away,
+// with no parse error, no render error, and identical output. The error skeleton
+// is the grave case, because all three of its children fill `detail`, and the
+// reason for a failure is the entire content of an error page.
+//
+// Checked here as well as at startup so a theme author sees it in their own test
+// binary rather than in somebody's deployment log.
+func checkBlocks(t *testing.T, name string, tree fs.FS) {
+	t.Helper()
+
+	for _, line := range themeblocks.Missing(tree, themeblocks.Required) {
+		t.Errorf("theme %q: %s; a block an application or the framework fills that the parent "+
+			"does not declare is dropped silently, with no error at parse or render time", name, line)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/the-maldridge/webapp/internal/themeblocks"
 	"github.com/the-maldridge/webapp/tmpl"
 )
 
@@ -202,6 +203,11 @@ func (a *App) installTemplates() error {
 	}
 	if err := render.Verify(a.theme.Required...); err != nil {
 		return fmt.Errorf("webapp: theme %q cannot serve without its templates: %w", a.theme.Name, err)
+	}
+	if lines := themeblocks.Missing(themeFS, themeblocks.Required); len(lines) > 0 {
+		return fmt.Errorf("webapp: theme %q is missing blocks the framework's templates fill, which "+
+			"pongo2 drops silently rather than reporting: %s",
+			a.theme.Name, strings.Join(lines, "; "))
 	}
 	if err := a.verifyThemeAssets(); err != nil {
 		return err

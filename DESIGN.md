@@ -258,6 +258,64 @@ user does. The assets follow the same resolution: the active theme's static tree
 `/static/core`, so a theme's stylesheet URL is a stable shape and a template never mentions which
 theme produced the page it is on.
 
+A theme is therefore not required to live in this repository, and the two things a theme author
+outside it would otherwise have to hardcode are supplied instead: `RequiredTemplates` returns the
+set construction will demand, and `webapp/themetest` runs every contract rule against a theme from
+inside the theme's own package. `themetest` was an internal package until that mattered, because an
+internal package cannot be imported from another module, which meant the contract was checkable by
+anyone except the audience the contract is written for. Both depend only on `tmpl` and the standard
+library, so a theme pulls in no more of the framework than a theme should.
+
+Three things an external theme author has to know without being told, and the framework can describe
+but not prevent. Which template variables exist is documented in §5.4 and nowhere machine-checkable,
+so a theme referencing `{{ user.Identity }}` on a page the framework renders outside the sign-in
+flow finds out at render time. A filter registered from a theme's `init` competes in pongo2's
+process-global filter map, so an unprefixed name can collide with another package's and the loser
+learns at startup; the framework reports the collision, but prefixing avoids it. And a vendored
+asset must be present when the theme is compiled, because generation cannot reach across modules
+(§8.5). The behavioural contract, which is the CSRF field, the never-repopulated password, and the
+undifferentiated login failure, is checked by the suite over the example application rather than by
+anything a theme author can call, so a theme that loses one of them is caught by the application
+using it rather than by its own tests.
+
+The per-template contract, since a theme has to satisfy it and cannot read it off the framework:
+
+| Template | Blocks a consumer may fill | Variables, and who supplies them |
+|---|---|---|
+| `base.p2` | `title`, `head`, `bodyclass`, `header`, `content`, `footer` | `siteTitle`, `buildVersion` (framework). Owns the `<link>` to its own stylesheet, and includes `@core/fragments/nav.p2` |
+| `login.p2` | `title`, `content` | `loginError`, `action`, `username`, `next` (application), `csrfInput`, `siteTitle` (framework) |
+| `fragments/nav.p2` | fragment, no blocks | `navElements` (`Base`/`Href`/`Icon`/`Label`/`Children`), `pageBase`, `isAuthenticated`, `csrfInput`, `user.Identity`, `signInURL`, `signOutURL` (framework) |
+| `errors/base.p2` | `title`, `content`, `detail` (left empty, for its children) | `status`, `statusText`, `requestId`, `siteTitle` (framework), `errorDetail` (framework, debug only) |
+| `errors/notfound.p2` | `detail` | none beyond the skeleton |
+| `errors/unauthorized.p2` | `detail` | `isAuthenticated`, `user.Identity`, `requiredPerm`, `signInURL` |
+| `errors/internal.p2` | `detail` | none beyond the skeleton |
+
+Two entries in that table say something about the design rather than merely recording it. The login
+page's variables come from the application, not the framework, because the framework renders the
+form but whoever wires up sign-in decides the failure wording; the one requirement that survives the
+cut is that a single message covers a wrong username and a wrong password alike, so the page cannot
+become an oracle for which half of a credential is valid. And `errorDetail` is present only under
+`Config.Debug`, which is why a theme may render it and must not depend on it: a theme that puts the
+detail in a wrapper element only when it is non-empty is correct in both modes, and a theme that
+assumes it is there will show an empty box in production.
+
+The block column is enforced at startup, and unlike the variable column it can be, which is why it
+is worth the paragraph. Pongo2 resolves a `{% block %}` a child fills against the parent it
+extends, and when the parent never declared that block, the render succeeds and the filled block is
+dropped. No parse error, no render error, and the output is indistinguishable from a template that
+never mentioned the block. `errors/base.p2` makes this serious rather than merely untidy: all three
+of its children fill `detail`, so a skeleton that lost the declaration during a refactor renders
+three error pages with the reason for the failure removed, which is the whole page, silently, on the
+page that appears when something else is already wrong. A test that asserts the error page "renders"
+passes, because it does.
+
+So construction reads the active theme's layouts and refuses one that omits a block anything fills,
+naming the template and the block. The required surface is the one documented above, which is what
+makes the table a contract rather than a description: an application that writes
+`{% block footer %}` has been told the framework's layouts have somewhere to put it, and a theme now
+cannot quietly take that away. A theme with no footer region is not forbidden, it declares an empty
+block, which costs one line and says something true.
+
 Because a theme owns its base layout, it owns its markup entirely. Bulma expects
 `.field > .label + .control`; the default theme's login form writes `<label class="field">`. No
 amount of vendored CSS reconciles the two, so a theme is a rewrite in the target framework's idiom

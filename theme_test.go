@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/the-maldridge/webapp/internal/themetest"
+	"github.com/the-maldridge/webapp/themetest"
 )
 
 // withCleanThemeRegistry restores the process-global theme registry after a test
@@ -55,16 +55,36 @@ var testThemeRequired = []string{
 
 // minimalThemeFiles returns a complete theme tree. Each template says what it is
 // so an assertion can tell which file produced the output.
+//
+// The block declarations are not decoration. A theme has to publish the blocks the
+// framework and an application's templates fill, and construction now refuses one
+// that does not, because pongo2 drops a filled block whose parent omitted it with
+// no error at all. The fixtures therefore satisfy the contract the same way a real
+// theme does, rather than being excused from it, which would mean the tests that
+// build a theme were testing a theme that could not ship.
 func minimalThemeFiles() map[string]string {
 	return map[string]string{
-		"base.p2":                `theme-base[{% block content %}{% endblock %}]`,
-		"login.p2":               `theme-login`,
-		"fragments/nav.p2":       `theme-nav`,
-		"errors/base.p2":         `theme-error[{% block detail %}{% endblock %}]`,
+		"base.p2": `theme-base[{% block title %}{% endblock %}{% block head %}{% endblock %}` +
+			`{% block bodyclass %}{% endblock %}{% block header %}{% endblock %}` +
+			`{% block content %}{% endblock %}{% block footer %}{% endblock %}]`,
+		"login.p2":         `theme-login{% block title %}{% endblock %}{% block content %}{% endblock %}`,
+		"fragments/nav.p2": `theme-nav`,
+		"errors/base.p2": `theme-error[{% block title %}{% endblock %}{% block content %}{% endblock %}` +
+			`{% block detail %}{% endblock %}]`,
 		"errors/notfound.p2":     `{% extends "@core/errors/base.p2" %}{% block detail %}gone{% endblock %}`,
 		"errors/unauthorized.p2": `{% extends "@core/errors/base.p2" %}{% block detail %}refused{% endblock %}`,
 		"errors/internal.p2":     `{% extends "@core/errors/base.p2" %}{% block detail %}broke{% endblock %}`,
 	}
+}
+
+// baseWithAsset returns a base layout declaring the full contract and linking the
+// named stylesheet, for tests about assets rather than about blocks.
+func baseWithAsset(url string) string {
+	return `<html><head>{% block title %}{% endblock %}` +
+		`<link rel="stylesheet" href="` + url + `">` +
+		`{% block head %}{% endblock %}</head>` +
+		`<body class="{% block bodyclass %}{% endblock %}{% block header %}{% endblock %}">` +
+		`{% block content %}{% endblock %}{% block footer %}{% endblock %}</body></html>`
 }
 
 // TestDefaultThemeIsBuiltin pins the behaviour every existing application
@@ -338,12 +358,8 @@ func TestThemeMissingAssetFailsConstruction(t *testing.T) {
 	withCleanThemeRegistry(t)
 
 	files := minimalThemeFiles()
-	files["base.p2"] = `<html><head>
-<link rel="stylesheet" href="/static/core/css/generated.min.css">
-</head><body>{% block content %}{% endblock %}</body></html>`
-
-	info := testTheme("ungenerated", files)
-	RegisterTheme(info)
+	files["base.p2"] = baseWithAsset("/static/core/css/generated.min.css")
+	RegisterTheme(testTheme("ungenerated", files))
 
 	_, err := newTestAppNoBuild(t, WithTheme("ungenerated"))
 	if err == nil {
@@ -366,9 +382,7 @@ func TestThemeAssetWithCacheStampResolves(t *testing.T) {
 	withCleanThemeRegistry(t)
 
 	files := minimalThemeFiles()
-	files["base.p2"] = `<html><head>
-<link rel="stylesheet" href="/static/core/css/theme.css?v=1.2.3">
-</head><body>{% block content %}{% endblock %}</body></html>`
+	files["base.p2"] = baseWithAsset("/static/core/css/theme.css?v=1.2.3")
 
 	info := testTheme("stamped", files)
 	info.Static = func() fs.FS {
@@ -397,6 +411,56 @@ func TestThemeWithoutStylesheetIsAccepted(t *testing.T) {
 	}
 }
 
+// TestThemeMissingBlockFailsConstruction covers the failure pongo2 cannot report:
+// a child template filling a block its parent never declared renders the parent
+// and throws the filled block away, with no error at parse time or render time.
+//
+// The error skeleton is the case that matters. Its three children all fill
+// `detail`, so a base that omitted the block produces three error pages whose
+// entire content, the reason for the failure, has been silently removed. That is
+// a defect invisible to a test that only checks the page renders, and the page is
+// the one that appears when something else has already gone wrong.
+func TestThemeMissingBlockFailsConstruction(t *testing.T) {
+	withCleanThemeRegistry(t)
+
+	files := minimalThemeFiles()
+	files["errors/base.p2"] = `theme-error[{% block title %}{% endblock %}{% block content %}{% endblock %}]`
+	RegisterTheme(testTheme("nodetail", files))
+
+	_, err := newTestAppNoBuild(t, WithTheme("nodetail"))
+	if err == nil {
+		t.Fatal("a theme whose error skeleton omits the block its children fill was accepted")
+	}
+	for _, want := range []string{"nodetail", "errors/base.p2", "detail"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error should name %q so the theme author knows which file lacks which block, "+
+				"got: %v", want, err)
+		}
+	}
+}
+
+// TestThemeMissingApplicationBlockFailsConstruction covers `head`, the block an
+// application's pages fill to add a stylesheet. Dropping it costs a themed
+// deployment its application's CSS with no other symptom, which is the same class
+// of silent failure as the error skeleton and arrives the same way: a theme
+// refactor that removed a block nobody rendered in a test.
+func TestThemeMissingApplicationBlockFailsConstruction(t *testing.T) {
+	withCleanThemeRegistry(t)
+
+	files := minimalThemeFiles()
+	files["base.p2"] = `theme-base[{% block title %}{% endblock %}{% block bodyclass %}{% endblock %}` +
+		`{% block header %}{% endblock %}{% block content %}{% endblock %}{% block footer %}{% endblock %}]`
+	RegisterTheme(testTheme("nohead", files))
+
+	_, err := newTestAppNoBuild(t, WithTheme("nohead"))
+	if err == nil {
+		t.Fatal("a theme whose base layout omits the head block was accepted")
+	}
+	if !strings.Contains(err.Error(), "head") {
+		t.Errorf("the error should name the missing block, got: %v", err)
+	}
+}
+
 // TestThemeNilStaticWithLinksFails covers the combination that would otherwise
 // dereference a nil filesystem: a theme returning no asset tree at all while its
 // layout links from it.
@@ -409,9 +473,7 @@ func TestThemeNilStaticWithLinksFails(t *testing.T) {
 	withCleanThemeRegistry(t)
 
 	files := minimalThemeFiles()
-	files["base.p2"] = `<html><head>
-<link rel="stylesheet" href="/static/core/css/theme.css">
-</head><body>{% block content %}{% endblock %}</body></html>`
+	files["base.p2"] = baseWithAsset("/static/core/css/theme.css")
 
 	info := testTheme("nostatic", files)
 	info.Static = func() fs.FS { return nil }
@@ -423,6 +485,35 @@ func TestThemeNilStaticWithLinksFails(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "/static/core/css/theme.css") {
 		t.Errorf("the error should name the missing asset, got: %v", err)
+	}
+}
+
+// TestRequiredTemplatesIsTheContractEveryThemeIsCheckedAgainst pins that the
+// exported accessor hands out exactly what construction enforces, so a theme in
+// another module that builds its Required from it cannot disagree with the startup
+// check it is supposed to predict.
+func TestRequiredTemplatesIsTheContractEveryThemeIsCheckedAgainst(t *testing.T) {
+	got := strings.Join(RequiredTemplates(), "\n")
+	want := strings.Join(testThemeRequired, "\n")
+	if got != want {
+		t.Errorf("RequiredTemplates() disagrees with what the theme contract enforces:\n"+
+			"RequiredTemplates:\n%s\ncontract:\n%s", got, want)
+	}
+}
+
+// TestRequiredTemplatesReturnsACopy covers the mutation a caller would otherwise
+// inflict on every later check: writing to the slice it was handed would change
+// what the framework believes it renders, for the whole process.
+func TestRequiredTemplatesReturnsACopy(t *testing.T) {
+	first := RequiredTemplates()
+	if len(first) == 0 {
+		t.Fatal("RequiredTemplates() returned nothing")
+	}
+	first[0] = "tampered"
+
+	if second := RequiredTemplates(); second[0] == "tampered" {
+		t.Errorf("the slice handed to a caller is the registry's own, so a theme could rewrite " +
+			"the contract for everyone")
 	}
 }
 

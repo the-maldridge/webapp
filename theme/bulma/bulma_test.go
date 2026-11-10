@@ -11,9 +11,9 @@ import (
 	"testing"
 
 	"github.com/the-maldridge/webapp"
-	"github.com/the-maldridge/webapp/internal/themetest"
 	"github.com/the-maldridge/webapp/theme/builtin"
 	"github.com/the-maldridge/webapp/theme/bulma"
+	"github.com/the-maldridge/webapp/themetest"
 )
 
 // bundlePath is the vendored stylesheet this theme's base layout links, below

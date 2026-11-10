@@ -92,6 +92,23 @@ func init() {
 // the one used when configuration names no theme.
 const BuiltinThemeName = "builtin"
 
+// RequiredTemplates returns the templates every theme has to supply, in the
+// form a Required entry takes.
+//
+// It exists for a theme written outside this repository. Such a theme needs the
+// names, and the only other place they are readable is builtin.Required, which
+// means importing the default theme and embedding its templates into a binary
+// that renders only the other one. The list is fixed by what the framework
+// renders itself rather than by whichever theme happens to be loaded, so reading
+// it from the root package costs nothing: the default theme is linked into every
+// application already, because that is what the framework falls back to.
+//
+// The returned slice is a copy. A theme that appended to the one it was given
+// would otherwise change what every later theme was checked against.
+func RequiredTemplates() []string {
+	return append([]string(nil), builtin.Required...)
+}
+
 // RegisterTheme adds a theme to the process-global registry so that
 // <PREFIX>_THEME can select it by name.
 //

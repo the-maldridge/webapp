@@ -3,8 +3,8 @@ package builtin_test
 import (
 	"testing"
 
-	"github.com/the-maldridge/webapp/internal/themetest"
 	"github.com/the-maldridge/webapp/theme/builtin"
+	"github.com/the-maldridge/webapp/themetest"
 )
 
 // TestThemeContract runs the rules every theme has to satisfy against this one.
