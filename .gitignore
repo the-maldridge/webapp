@@ -11,3 +11,11 @@ go.work.sum
 # default because the example's main package lives in a directory named tasks, and
 # a bare build would collide with it.
 dist/
+
+# The database the example creates when it is run without TASKS_DB, together with
+# the sidecar files SQLite keeps alongside a live database. Unanchored on purpose:
+# the path is relative to wherever the process was started, so this appears at the
+# repository root or under examples/tasks depending on where `go run` was invoked.
+# The test suite is not the source of these; it opens its databases in TempDir.
+tasks.db
+tasks.db-*
