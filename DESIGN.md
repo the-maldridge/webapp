@@ -578,9 +578,14 @@ the kind and the permission that was required, and hands it to a `DenialHandler`
 its own at `InstallAuth` time, so denials are content-negotiated and status-correct: 401 when no
 user is present, 403 when a user lacks the grant. If the request prefers `application/json`, the
 body is `{"error": "permission denied", "required": "TASKS:ADMIN"}`; otherwise the unauthorized
-template renders with the required permission named. A 401 carries `WWW-Authenticate`. Returning an
-HTML page or a 200 to an API caller produces a client that believes a rejected write succeeded, and
-an auth package that decided the response format could not be tested without a render funnel.
+template renders with the required permission named. A 401 carries `WWW-Authenticate` unless the
+request's first stated preference is HTML, because a browser given a challenge answers it by painting
+its own dialog over the response body, and that body is the page telling the person how to sign in:
+the client least able to use a credential in a header was the client most reliably denied the
+instructions. A client with no stated preference is not an HTML client, so curl still gets the
+challenge. Returning an HTML page or a 200 to an API caller produces a client that believes a
+rejected write succeeded, and an auth package that decided the response format could not be tested
+without a render funnel.
 
 Applications without an installed service deny with 500 rather than passing through: a gate
 configured on an application that has no identity behind it is a configuration bug, and "protected

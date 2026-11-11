@@ -682,3 +682,47 @@ func TestSessionLifetimeFlowsThroughInstall(t *testing.T) {
 		t.Errorf("lifetime after install = %s, want the application not to reset it", got)
 	}
 }
+
+// TestDenialOmitsChallengeForBrowsers pins the other half of the challenge
+// rule. A browser given a 401 with a challenge paints its own dialog over the
+// response body, so the page telling the person how to sign in never appears;
+// the rendered denial is what an HTML client needs, and the challenge is what
+// suppresses it.
+func TestDenialOmitsChallengeForBrowsers(t *testing.T) {
+	cases := []struct {
+		name     string
+		accept   string
+		wantAuth bool
+		wantType string
+	}{
+		{"browser", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", false, "text/html"},
+		{"api", "application/json", true, "application/json"},
+		{"no preference", "", true, "text/html"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newTestApp(t)
+			svc := newCoreAuthService(t)
+			installAuth(t, a, svc)
+
+			a.Route("/admin", func(r Router) {
+				r.Get("/", r.Guard(auth.P("tasks", "edit"), okHandler))
+			})
+
+			rec := a.send(t, withAccept(httptest.NewRequest(http.MethodGet, "/admin", nil), tc.accept))
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want 401", rec.Code)
+			}
+			if got := rec.Header().Get("WWW-Authenticate"); (got != "") != tc.wantAuth {
+				t.Errorf("WWW-Authenticate = %q, want present: %v", got, tc.wantAuth)
+			}
+			if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, tc.wantType) {
+				t.Errorf("Content-Type = %q, want it to start with %q", got, tc.wantType)
+			}
+			if strings.Contains(rec.Body.String(), "secret") {
+				t.Error("the protected handler's body leaked")
+			}
+		})
+	}
+}

@@ -37,6 +37,40 @@ func TestWantsJSON(t *testing.T) {
 	}
 }
 
+func TestWantsHTML(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		accept string
+		want   bool
+	}{
+		// No stated preference is not a request for a page, which is what
+		// keeps this the mirror of wantsJSON rather than a second way of
+		// asking the same question: an unnamed default stays whatever the
+		// response layer already defaults to.
+		{"", false},
+		{"*/*", false},
+		{"application/json", false},
+		{"image/png", false},
+		{"text/html", true},
+		{"text/html; charset=utf-8", true},
+		{"application/xhtml+xml", true},
+
+		// The same preference-order rule as wantsJSON: a browser lists
+		// text/html first even though its Accept mentions json and xml, and
+		// the first type is the one that describes what it will show.
+		{"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", true},
+		{"application/json,text/html", false},
+		{"text/html;q=0.9,application/json", true},
+	}
+
+	for _, tc := range cases {
+		if got := wantsHTML(acceptHeader(tc.accept)); got != tc.want {
+			t.Errorf("wantsHTML(%q) = %v, want %v", tc.accept, got, tc.want)
+		}
+	}
+}
+
 func TestSanitizeConvertsErrorsToStrings(t *testing.T) {
 	// An error in a render context is routine: reporting why something
 	// failed is what a page does. The engine autoescapes strings but calls

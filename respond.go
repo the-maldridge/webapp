@@ -393,6 +393,27 @@ func wantsJSON(r *http.Request) bool {
 	return false
 }
 
+// wantsHTML reports whether the client's first stated preference is an HTML
+// page. It is deliberately the mirror of wantsJSON rather than the same
+// question: a client with no usable preference, which is what an empty Accept
+// or a bare */* describes, is answered by the default the response layer was
+// already built to give, and that default is not HTML. The two can therefore
+// both be false for one request without disagreeing about anything.
+func wantsHTML(r *http.Request) bool {
+	for _, part := range strings.Split(r.Header.Get("Accept"), ",") {
+		media := strings.TrimSpace(strings.SplitN(part, ";", 2)[0])
+		switch {
+		case media == "text/html", media == "application/xhtml+xml":
+			return true
+		case media == "":
+			continue
+		default:
+			return false
+		}
+	}
+	return false
+}
+
 // errString returns a non-nil error's text, or the empty string.
 func errString(err error) string {
 	if err == nil {

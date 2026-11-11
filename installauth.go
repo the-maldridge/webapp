@@ -207,8 +207,13 @@ func (a *App) renderDenial(w http.ResponseWriter, r *http.Request, d auth.Denial
 
 	// 401 carries a challenge so a client that can authenticate by header
 	// knows it may retry. Without it, a correct credential in the wrong shape
-	// produces a response no client can act on.
-	if status == http.StatusUnauthorized {
+	// produces a response no client can act on. A client whose first stated
+	// preference is HTML does not get one: a browser that receives the
+	// challenge answers it by painting its own dialog over the response body,
+	// which is precisely the page telling that person how to sign in. The
+	// challenge is for machines that read headers; the rendered denial, which
+	// browsers can show, is for browsers.
+	if status == http.StatusUnauthorized && !wantsHTML(r) {
 		w.Header().Set("WWW-Authenticate", `Basic realm="restricted", charset="UTF-8"`)
 	}
 

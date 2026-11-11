@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -71,6 +72,33 @@ func TestAnonymousIsRefusedTheList(t *testing.T) {
 	resp := a.Get("/ui/task/")
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("anonymous list = %d, want 401; body: %s", resp.StatusCode, webapptest.Body(t, resp))
+	}
+}
+
+// TestBrowserGetsTheSignInLinkNotADialog is the same refusal seen by the client
+// that actually navigates to this application: a browser, whose Accept header
+// says HTML first. A 401 carrying a Basic challenge makes such a client paint
+// its own username/password dialog over the response, and the response is the
+// error page whose Sign-in link is the way in. The dialog is also a second,
+// worse login form: it submits on every request to the origin forever after,
+// which is not what an interactive session means. So the page has to arrive
+// unchallenged, and this pins it.
+func TestBrowserGetsTheSignInLinkNotADialog(t *testing.T) {
+	a := app(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/task/", nil)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	resp := a.Do(req)
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("browser list = %d, want 401", resp.StatusCode)
+	}
+	if got := resp.Header.Get("WWW-Authenticate"); got != "" {
+		t.Errorf("WWW-Authenticate = %q; a browser will show its own dialog instead of the page", got)
+	}
+	body := webapptest.Body(t, resp)
+	if !strings.Contains(body, `href="/login"`) {
+		t.Error("the refusal a browser renders does not link the sign-in page")
 	}
 }
 

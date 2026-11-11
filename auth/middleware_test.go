@@ -3,6 +3,7 @@ package auth
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -386,5 +387,42 @@ func TestDenialBase64CredentialRoundTrip(t *testing.T) {
 	}
 	if string(decoded) != "ada:secret" {
 		t.Fatalf("decoded %q", decoded)
+	}
+}
+
+// TestDefaultDenialHandlerChallengeByAccept pins which clients are handed a
+// challenge. A client that reads headers needs the 401 to say it may retry
+// with a credential; a browser answered a challenge by painting its own
+// dialog over the response body, so the one client that can render a page is
+// the one client that must not get the header.
+func TestDefaultDenialHandlerChallengeByAccept(t *testing.T) {
+	cases := []struct {
+		accept   string
+		wantAuth bool
+	}{
+		{"", true},
+		{"*/*", true},
+		{"application/json", true},
+		{"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", false},
+		{"text/html", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("accept=%q", tc.accept), func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/private", nil)
+			if tc.accept != "" {
+				req.Header.Set("Accept", tc.accept)
+			}
+
+			rec := httptest.NewRecorder()
+			defaultDenialHandler(rec, req, Denial{Kind: DenialNoUser})
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want 401", rec.Code)
+			}
+			if got := rec.Header().Get("WWW-Authenticate"); (got != "") != tc.wantAuth {
+				t.Errorf("WWW-Authenticate = %q, want present: %v", got, tc.wantAuth)
+			}
+		})
 	}
 }

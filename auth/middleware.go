@@ -102,8 +102,13 @@ type DenialHandler func(http.ResponseWriter, *http.Request, Denial)
 //
 // A 401 gets WWW-Authenticate so a client that can authenticate by header
 // knows it may try, which is the difference between a client that loops
-// correctly and one that gives up. The challenge names Basic only when a
-// password mechanism is installed.
+// correctly and one that gives up. A client whose first stated preference is
+// HTML does not get one, because the browser that receives the challenge
+// paints its own dialog over the response body instead of showing it; a
+// browser gets a page. The condition is the client's Accept header rather
+// than any notion of which credential mechanisms are installed, because what
+// a client can do with a challenge is decided by what it is, and the only
+// thing a server gets to know about that is what it asked for.
 func defaultDenialHandler(w http.ResponseWriter, r *http.Request, d Denial) {
 	body := `{"error":"` + jsonEscape(d.Error()) + `"`
 	if d.Kind == DenialForbidden && d.Perm.Module != "" {
@@ -114,11 +119,35 @@ func defaultDenialHandler(w http.ResponseWriter, r *http.Request, d Denial) {
 	header := w.Header()
 	header.Set("Content-Type", "application/json; charset=utf-8")
 	header.Set("Cache-Control", "no-store")
-	if d.Kind == DenialNoUser {
+	if d.Kind == DenialNoUser && !wantsHTML(r) {
 		header.Set("WWW-Authenticate", `Basic realm="restricted", charset="UTF-8"`)
 	}
 	w.WriteHeader(d.Kind.Status())
 	_, _ = w.Write([]byte(body))
+}
+
+// wantsHTML reports whether the client's first stated preference is an HTML
+// page. It is a deliberately small reader of Accept: the first media type
+// with a quality, or none, decides, and anything that is not HTML or
+// xhtml is "not a browser as far as this knows". An absent or empty header
+// means no stated preference, which is not a request for a page.
+//
+// The web core answers the same question for itself; this package cannot
+// import it, and duplicating nine lines is the cheaper price for an auth
+// package with no dependency on a web framework.
+func wantsHTML(r *http.Request) bool {
+	for _, part := range strings.Split(r.Header.Get("Accept"), ",") {
+		media := strings.TrimSpace(strings.SplitN(part, ";", 2)[0])
+		switch media {
+		case "":
+			continue
+		case "text/html", "application/xhtml+xml":
+			return true
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 // jsonEscape escapes a string for embedding in a JSON string literal.
