@@ -10,6 +10,13 @@ module rather than a package inside the framework because it imports a theme tha
 imports the framework; as a package of the framework's own module that theme
 would have to be imported by the framework to be reachable, which is a cycle.
 
+Being a module means the framework is resolved by the version in this directory's
+`go.sum`, exactly as it is for any other consumer of it. A `go.work` in the parent
+directory overrides that with the local checkout, which is what makes a change
+spanning both repositories testable from one place; the file is gitignored, so a
+clone without one is not broken, it is simply running the released framework,
+which is a correct answer to a different question.
+
 ## Run it
 
 ```sh

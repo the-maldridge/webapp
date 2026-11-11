@@ -1,7 +1,8 @@
 # The framework has no generated assets: the alternative theme that used to vendor
 # a stylesheet by fetching it now lives in its own repository, where the bundle is
-# committed. A fresh clone of this module therefore builds with no network, and the
-# generate target below is left in place only for whatever comes next.
+# committed. A fresh clone of this module therefore builds without fetching any
+# asset of its own, and the generate target below is left in place only for
+# whatever comes next.
 GO ?= go
 
 # Modules to check. The example application is a module of its own, because it
@@ -48,13 +49,11 @@ race:
 
 ## tidy: verify go.mod and go.sum need no changes
 #
-# Root module only, deliberately. The example and the Bulma theme resolve this
-# repository through a gitignored go.work while it is untagged, and `go mod tidy`
-# outside a workspace needs a version to require, which needs a pushed tag. Until
-# webapp is published, tidy in those modules fails against the network; once it is
-# tagged they get a require and a go.sum of their own and this can loop MODULES.
+# Every module in the tree, each on its own terms: `go mod tidy` is a per-module
+# operation that ignores any workspace, which is what lets the example resolve
+# this repository the way its own consumers do, by published version.
 tidy:
-	$(GO) mod tidy
+	for m in $(MODULES); do (cd $$m && $(GO) mod tidy) || exit 1; done
 
 ## clean: remove build output
 clean:
