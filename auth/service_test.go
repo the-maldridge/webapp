@@ -8,7 +8,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/the-maldridge/authware"
 	"golang.org/x/crypto/bcrypt"
+)
+
+// These assertions are the property this package promises about its mechanism
+// interfaces: they are authware's, so a backend written against authware
+// satisfies them with no forwarding type in between. Reintroducing a private
+// interface with renamed methods fails compilation here rather than silently
+// costing every consumer of those backends a shim.
+var (
+	_ authware.Authenticator      = Mechanism(nil)
+	_ Mechanism                   = authware.Authenticator(nil)
+	_ authware.TokenAuthenticator = TokenMechanism(nil)
+	_ TokenMechanism              = authware.TokenAuthenticator(nil)
+	_ PasswordUpgrader            = (*dbMechanism)(nil)
 )
 
 func TestCreateAccountNormalizesIdentity(t *testing.T) {
@@ -621,6 +635,15 @@ func TestOptionValidation(t *testing.T) {
 	if err := WithOnlyMechanisms()(svc); err == nil {
 		t.Error("WithOnlyMechanisms() with none should fail")
 	}
+	if err := WithTokenMechanism(nil)(svc); err == nil {
+		t.Error("WithTokenMechanism(nil) should fail")
+	}
+	if err := WithOnlyTokenMechanisms()(svc); err == nil {
+		t.Error("WithOnlyTokenMechanisms() with none should fail")
+	}
+	if err := WithOnlyTokenMechanisms(nil)(svc); err == nil {
+		t.Error("WithOnlyTokenMechanisms(nil) should fail")
+	}
 	if err := WithLogger(nil)(svc); err == nil {
 		t.Error("WithLogger(nil) should fail")
 	}
@@ -637,15 +660,235 @@ type stubMechanism struct{ name string }
 
 func (m stubMechanism) Name() string { return m.name }
 
-func (m stubMechanism) Verify(_ context.Context, identity, password string) error {
+func (m stubMechanism) AuthUserPassword(_ context.Context, identity, password string) error {
 	if identity == "stub" && password == "stub password" {
 		return nil
 	}
 	return ErrUnknownAccount
 }
 
-func (m stubMechanism) Groups(context.Context, string) (map[string]struct{}, error) {
+func (m stubMechanism) UserGroups(context.Context, string) (map[string]struct{}, error) {
 	return map[string]struct{}{"STUB:VIEW": {}}, nil
+}
+
+// authwareStyleMechanism rejects with authware's own error type rather than this
+// package's sentinels, which is what a backend from authware's backend packages
+// does. It authenticates no one.
+type authwareStyleMechanism struct{}
+
+func (authwareStyleMechanism) Name() string { return "authware-style" }
+
+func (authwareStyleMechanism) AuthUserPassword(context.Context, string, string) error {
+	return new(authware.ErrUnauthenticated)
+}
+
+func (authwareStyleMechanism) UserGroups(context.Context, string) (map[string]struct{}, error) {
+	return nil, new(authware.ErrUnauthenticated)
+}
+
+// TestAuthwareBackendNeedsNoBridge hands an authware-shaped mechanism to
+// WithMechanism as it is. A rejection has to read as "not mine", so a mechanism
+// later in the chain still gets its turn, and the rejection must not be
+// reported as anything but the one indistinguishable failure.
+func TestAuthwareBackendNeedsNoBridge(t *testing.T) {
+	svc := newTestService(t, WithMechanism(authwareStyleMechanism{}))
+
+	if _, err := svc.Authenticate(context.Background(), "ada", testPassword); !errors.Is(err, ErrBadCredential) {
+		t.Fatalf("err = %v, want ErrBadCredential", err)
+	}
+
+	svc = newTestService(t, WithOnlyMechanisms(
+		authwareStyleMechanism{},
+		stubMechanism{name: "stub"},
+	))
+	user, err := svc.Authenticate(context.Background(), "stub", "stub password")
+	if err != nil {
+		t.Fatalf("Authenticate past an authware-style rejection: %v", err)
+	}
+	if user.AuthedBy != "stub" {
+		t.Errorf("AuthedBy = %q, want stub", user.AuthedBy)
+	}
+	if _, held := user.Groups["STUB:VIEW"]; !held {
+		t.Errorf("groups = %v, want STUB:VIEW", user.Groups)
+	}
+}
+
+func TestExpectedRejection(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"local unknown account", ErrUnknownAccount, true},
+		{"local bad credential", ErrBadCredential, true},
+		{"local disabled", ErrAccountDisabled, true},
+		{"authware unauthenticated", new(authware.ErrUnauthenticated), true},
+		{"authware does not exist", new(authware.ErrDoesNotExist), true},
+		{"wrapped authware", errors.Join(errors.New("backend"), new(authware.ErrUnauthenticated)), true},
+		{"authware backend internal", new(authware.ErrBackendInternal), false},
+		{"unrelated failure", errors.New("connection refused"), false},
+	} {
+		if got := expectedRejection(tc.err); got != tc.want {
+			t.Errorf("expectedRejection(%s) = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// stubTokenMechanism is a TokenMechanism that resolves one fixed token and
+// reports whatever identity and groups it was built with, so that the rules
+// about what a mechanism is allowed to assert are visible in one place.
+type stubTokenMechanism struct {
+	name     string
+	token    string
+	identity string
+	groups   map[string]struct{}
+}
+
+func (m stubTokenMechanism) Name() string { return m.name }
+
+func (m stubTokenMechanism) AuthToken(_ context.Context, token string) (authware.User, error) {
+	if token != m.token {
+		return authware.User{}, new(authware.ErrUnauthenticated)
+	}
+	return authware.User{Identity: m.identity, Groups: m.groups}, nil
+}
+
+func TestWithTokenMechanismAppends(t *testing.T) {
+	svc := newTestService(t, WithTokenMechanism(stubTokenMechanism{
+		name:     "external",
+		token:    "external token",
+		identity: "ci@example.com",
+		groups:   map[string]struct{}{"TASKS:RUN": {}},
+	}))
+
+	names := svc.TokenMechanisms()
+	if len(names) != 2 || names[0] != "database" || names[1] != "external" {
+		t.Fatalf("token mechanisms = %v, want [database external]", names)
+	}
+
+	// Appending leaves the local path working, which is the reason the option
+	// appends: machine credentials an operator can still revoke.
+	mustCreateAccount(t, svc, "ada", testPassword)
+	created, err := svc.NewToken(context.Background(), "ada", "ci", time.Hour)
+	if err != nil {
+		t.Fatalf("NewToken: %v", err)
+	}
+
+	local, err := svc.AuthenticateToken(context.Background(), created.Token)
+	if err != nil {
+		t.Fatalf("AuthenticateToken(local): %v", err)
+	}
+	if local.AuthedBy != "database" {
+		t.Errorf("AuthedBy = %q, want database", local.AuthedBy)
+	}
+
+	foreign, err := svc.AuthenticateToken(context.Background(), "external token")
+	if err != nil {
+		t.Fatalf("AuthenticateToken(external): %v", err)
+	}
+	if foreign.AuthedBy != "external" {
+		t.Errorf("AuthedBy = %q, want external", foreign.AuthedBy)
+	}
+}
+
+func TestWithOnlyTokenMechanismsDropsDatabase(t *testing.T) {
+	handle := newTestDB(t)
+
+	// Issue a local token while the database chain is installed.
+	withLocal := newTestServiceOn(t, handle)
+	mustCreateAccount(t, withLocal, "ada", testPassword)
+	created, err := withLocal.NewToken(context.Background(), "ada", "ci", time.Hour)
+	if err != nil {
+		t.Fatalf("NewToken: %v", err)
+	}
+
+	svc := newTestServiceOn(t, handle, WithOnlyTokenMechanisms(stubTokenMechanism{
+		name:     "external",
+		token:    "external token",
+		identity: "ci@example.com",
+	}))
+
+	if names := svc.TokenMechanisms(); len(names) != 1 || names[0] != "external" {
+		t.Fatalf("token mechanisms = %v, want [external]", names)
+	}
+
+	// The row still exists and nothing reads it: that is the documented
+	// consequence of replacing the chain, not a leak.
+	if _, err := svc.AuthenticateToken(context.Background(), created.Token); !errors.Is(err, ErrTokenInvalid) {
+		t.Errorf("dropped database token err = %v, want ErrTokenInvalid", err)
+	}
+	if _, err := svc.AuthenticateToken(context.Background(), "external token"); err != nil {
+		t.Errorf("external token: %v", err)
+	}
+}
+
+// TestTokenMechanismChainsAreOrthogonal covers the configuration the two chains
+// exist to allow: people against a non-database password mechanism, machines
+// against the database, one credential type not implying the other.
+func TestTokenMechanismChainsAreOrthogonal(t *testing.T) {
+	svc := newTestService(t,
+		WithOnlyMechanisms(stubMechanism{name: "directory"}),
+		WithTokenMechanism(stubTokenMechanism{
+			name:     "external",
+			token:    "external token",
+			identity: "ci@example.com",
+		}),
+	)
+
+	if names := svc.Mechanisms(); len(names) != 1 || names[0] != "directory" {
+		t.Errorf("password mechanisms = %v, want [directory]", names)
+	}
+	if names := svc.TokenMechanisms(); len(names) != 2 || names[0] != "database" {
+		t.Errorf("token mechanisms = %v, want the database chain kept", names)
+	}
+
+	// Local passwords are gone, and bearer tokens over the same table are not.
+	if _, err := svc.Authenticate(context.Background(), "ada", testPassword); !errors.Is(err, ErrBadCredential) {
+		t.Errorf("password through dropped chain err = %v, want ErrBadCredential", err)
+	}
+	if _, err := svc.AuthenticateToken(context.Background(), "external token"); err != nil {
+		t.Errorf("external token: %v", err)
+	}
+}
+
+func TestTokenMechanismIdentityAndGroups(t *testing.T) {
+	svc := newTestService(t, WithTokenMechanism(stubTokenMechanism{
+		name:     "external",
+		token:    "external token",
+		identity: "  CI@Example.COM  ",
+		groups:   map[string]struct{}{"foreign:group": {}, "TASKS:RUN": {}},
+	}))
+
+	user, err := svc.AuthenticateToken(context.Background(), "external token")
+	if err != nil {
+		t.Fatalf("AuthenticateToken: %v", err)
+	}
+	// Identity is normalized into the local namespace; groups are exactly what
+	// the mechanism reported, case included.
+	if user.Identity != "ci@example.com" {
+		t.Errorf("identity = %q, want ci@example.com", user.Identity)
+	}
+	if _, held := user.Groups["foreign:group"]; !held {
+		t.Errorf("groups = %v, want the mechanism's groups passed through", user.Groups)
+	}
+}
+
+func TestTokenMechanismWithBlankIdentityIsSkipped(t *testing.T) {
+	svc := newTestService(t, WithTokenMechanism(stubTokenMechanism{
+		name:     "blank",
+		token:    "external token",
+		identity: "   ",
+	}))
+
+	// A mechanism asserting whitespace has no more claim to be a principal than
+	// one asserting nothing, and an empty identity must not reach a handler.
+	user, err := svc.AuthenticateToken(context.Background(), "external token")
+	if !errors.Is(err, ErrTokenInvalid) {
+		t.Fatalf("err = %v, want ErrTokenInvalid", err)
+	}
+	if user.Identity != "" {
+		t.Errorf("identity = %q, want empty", user.Identity)
+	}
 }
 
 // mustGroups reads an identity's groups, failing the test on error.

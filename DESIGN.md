@@ -2,6 +2,13 @@
 
 Module: `github.com/the-maldridge/webapp`
 
+This document is the *why*: the reasons a decision went the way it did, and the
+failure each one closes. It is not a tutorial and not an API reference. For a task
+to start on, use `AGENTS.md`. For signatures and documented call shapes, use
+`go doc github.com/the-maldridge/webapp` and its subpackages, which are generated
+from the source and so cannot be stale. For working code, read `examples/tasks`.
+Jump into the sections below by name; the index in `AGENTS.md` maps tasks to them.
+
 `webapp` is a framework for building server-rendered Go applications. It targets the shape of
 program that Go is constantly asked to build — a CRUD-ish internal tool, a moderation queue, a
 tracker, a management console — where 90% of the code is routing, templates, database plumbing,
@@ -51,26 +58,30 @@ with no layer being well-integrated.
 | Templates | `github.com/flosch/pongo2/v6` | Django-syntax templates, `fs.FS` loading, template inheritance, autoescaping |
 | Database | `gorm.io/gorm`, generic API (`gorm.G[T]`) | Compile-checked, context-first queries; migrations; association loading |
 | Drivers | `gorm.io/driver/sqlite` (default), `gorm.io/driver/postgres` | Covers single-binary deploys through real multi-instance deploys |
-| AuthN | `github.com/the-maldridge/authware` | User type and context keys, stateless encrypted session cookie format |
+| AuthN | `github.com/the-maldridge/authware` | User type and context keys, mechanism interfaces, stateless encrypted session cookie format |
 | Passwords | `golang.org/x/crypto/bcrypt` | Appropriate default work factor, no tuning required |
 | Logging | `log/slog` | Stdlib, structured, no configuration |
 
 Authentication is a `Service` owned by `webapp/auth`, configured through a mechanism chain rather
-than a global registry:
+than a global registry. The chain is typed with authware's own interfaces:
 
 ```go
-type Mechanism interface {
-    Verify(ctx context.Context, identity, password string) error
-    Groups(ctx context.Context, identity string) (map[string]struct{}, error)
-    Name() string
-}
+type Mechanism      = authware.Authenticator       // AuthUserPassword, UserGroups, Name
+type TokenMechanism = authware.TokenAuthenticator  // AuthToken, Name
 ```
 
-`Verify` returns an error rather than a bool-and-nil so that "this mechanism does not know that
-account" and "wrong password" stay distinguishable internally while collapsing to one indistinguishable
-failure on the way out. Token resolution and password upgrades are separate optional interfaces,
-so a backend that cannot write passwords does not have to pretend. The database mechanism is in the
-chain by default and an application appends or replaces the set with options; see §7.6.
+A credential check returns an error rather than a bool-and-nil so that "this mechanism does not know
+that account" and "wrong password" stay distinguishable internally while collapsing to one
+indistinguishable failure on the way out. Password upgrades are a separate optional interface,
+`PasswordUpgrader`, so a backend that cannot write passwords does not have to pretend. The database
+mechanism is in the chain by default and an application appends or replaces the set with options;
+see §7.6.
+
+Borrowing authware's interfaces rather than restating them under local method names is what keeps a
+backend written for authware — `htpasswd`, `ldap`, `pam`, `netauth`, `apitoken` — usable exactly as
+it is. A look-alike interface with the same three methods under different names would have looked
+equivalent and cost every application that wanted one of those backends a forwarding type whose only
+content was renames.
 
 ## 3. Package layout
 
@@ -609,16 +620,19 @@ the profile row above. An application gets real accounts without a password file
 another backend by supplying a mechanism:
 
 ```go
-svc, err := auth.New(d, auth.WithMechanism(ldapMechanism{})) // database stays as fallback
-svc, err := auth.New(d, auth.WithOnlyMechanisms(ldapMechanism{})) // or drop local accounts
+mech, err := ldap.New() // any authware backend satisfies Mechanism as it is
+
+svc, err := auth.New(d, auth.WithMechanism(mech))      // database stays as fallback
+svc, err := auth.New(d, auth.WithOnlyMechanisms(mech)) // or drop local accounts
 ```
 
 `WithMechanism` appends, leaving the database backend in the chain so a local administrator can
 still get in when a directory is down — which is precisely when an emergency account matters.
 `WithOnlyMechanisms` replaces it, for deployments where a local table is a liability rather than a
-fallback. A mechanism is three methods — `Verify`, `Groups`, `Name` — with token resolution and
-password upgrades as optional interfaces, so an LDAP directory that cannot write passwords declares
-fewer capabilities rather than stubbing out ones it cannot honor.
+fallback. A mechanism is authware's `Authenticator` and a token mechanism is authware's
+`TokenAuthenticator`, so a backend from authware's own backend packages needs nothing in front of it.
+Password upgrades are the one capability interface declared here, so an LDAP directory that cannot
+write passwords declares fewer capabilities rather than stubbing out ones it cannot honor.
 
 Mechanisms are constructor arguments, not names in a global registry. The alternative — a package
 `Factory func() (Authenticator, error)` keyed by name, selected by an environment variable — has
@@ -647,6 +661,24 @@ API tokens carry 256 bits of entropy and are stored as SHA-256 digests, not bcry
 cost is a defense against low-entropy input, and paying it on every token-authenticated request
 would only slow the server down. The plaintext is shown once at creation, alongside a short display
 prefix.
+
+Token resolution is its own chain, installed the same way: `WithTokenMechanism` appends and
+`WithOnlyTokenMechanisms` replaces, both typed with authware's `TokenAuthenticator`, and
+`TokenMechanisms()` reports what is installed alongside `Mechanisms()`. The two chains are orthogonal
+by design rather than by oversight — `WithOnlyMechanisms` drops local passwords and leaves bearer
+tokens resolving against the database, which is exactly what lets an application authenticate people
+against a directory while machines keep credentials its admin screen can revoke.
+
+What a token means once installed is the mechanism's business: how long it lives, where its groups
+come from, whether it can be revoked before it expires. The framework guarantees those properties for
+the mechanism it ships and claims nothing about one it was handed, and `NewToken`, `ListTokens`, and
+`RevokeToken` administer the database rows, so after `WithOnlyTokenMechanisms` they keep writing a
+table nothing reads. That trade is offered deliberately — externally validated tokens with lifetime
+semantics the framework could not have anticipated are a legitimate configuration, and whoever chose
+the backend is the one who knows what it costs. The one thing imposed regardless is the package's own
+identity normalization: what a mechanism asserts is trimmed and lower-cased before it becomes a local
+principal, because profile rows, permission checks, and ownership key off a single name. Asserted
+groups pass through untouched.
 
 Two properties of the upstream session cookie are overridden rather than inherited. It is named
 `session`, and it is set with `HttpOnly` alone: no `Secure`, no `SameSite`. A cookie without

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	authware "github.com/the-maldridge/authware"
 	"github.com/the-maldridge/webapp/db"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -121,43 +122,59 @@ type Service struct {
 	env envLookup
 }
 
-// Mechanism verifies a password and reports an identity's groups. The
-// database-backed implementation is installed by default; anything else —
-// an htpasswd file, a directory, a test fixture — satisfies the interface.
-type Mechanism interface {
-	// Verify reports whether the password is correct for the identity. A
-	// mechanism that does not know the identity returns an error, not
-	// false-and-nil, so that "not mine" and "wrong password" stay
-	// distinguishable internally.
-	Verify(ctx context.Context, identity, password string) error
-
-	// Groups returns the identity's group names, upper-cased.
-	Groups(ctx context.Context, identity string) (map[string]struct{}, error)
-
-	// Name identifies the mechanism in logs and in a session's provenance.
-	Name() string
-}
-
-// TokenMechanism resolves a bearer token to an identity.
-type TokenMechanism interface {
-	// ResolveToken returns the identity and groups the token belongs to.
-	// Implementations must not set AuthedBy on the returned user; the
-	// caller stamps it with the mechanism name.
-	ResolveToken(ctx context.Context, token string) (identity string, groups map[string]struct{}, err error)
-
-	// Name identifies the mechanism.
-	Name() string
-}
-
-// PasswordUpgrader is an optional interface a Mechanism implements when it
-// can store a stronger hash for an identity it just verified.
+// Mechanism verifies a password and reports an identity's groups.
 //
-// It is separate from Mechanism because most backends cannot honour one: an
-// LDAP directory is written by the directory team, an htpasswd file is
-// readable-but-not-writable by design, and a third-party identity provider
-// has no interest in this application's work factor. A mechanism that can
-// write declares this interface and gets called after a successful Verify,
-// which is the only moment the plaintext exists to re-hash.
+// It is authware's Authenticator rather than a look-alike declared here, which
+// is what lets the backends authware ships — an htpasswd file, an LDAP
+// directory, PAM, NetAuth — go straight into WithMechanism, just as its token
+// backends go into WithTokenMechanism. A distinct interface with the same three
+// methods under different names would have looked equivalent and cost every
+// application that wanted one of those backends a forwarding type with nothing
+// in it but renames.
+//
+// A mechanism that does not know an identity reports it as an error rather than
+// false-and-nil, so that "not mine" and "wrong password" stay distinguishable
+// internally; see expectedRejection for how the two groups are told apart.
+type Mechanism = authware.Authenticator
+
+// TokenMechanism resolves a bearer token to an identity. Like Mechanism it is
+// authware's interface, here TokenAuthenticator, so a token backend needs no
+// adapter.
+//
+// Implementations must not set AuthedBy on the returned user; the caller stamps
+// it with the mechanism name.
+type TokenMechanism = authware.TokenAuthenticator
+
+// expectedRejection reports whether a mechanism's failure is a credential answer
+// rather than a backend going wrong. Wrong password, unknown identity, and
+// disabled account belong to the first group, and authware's own backends report
+// them with authware's error types instead of this package's sentinels.
+//
+// The distinction is what keeps the log legible: a credential answer is normal
+// operation, and an attacker trying a thousand usernames must not turn the
+// application's log into a thousand warnings. A backend failure still is one,
+// because that is the difference between a locked-out user and a dead directory.
+func expectedRejection(err error) bool {
+	var unauthenticated *authware.ErrUnauthenticated
+	var doesNotExist *authware.ErrDoesNotExist
+	return errors.Is(err, ErrUnknownAccount) ||
+		errors.Is(err, ErrBadCredential) ||
+		errors.Is(err, ErrAccountDisabled) ||
+		errors.As(err, &unauthenticated) ||
+		errors.As(err, &doesNotExist)
+}
+
+// PasswordUpgrader is an optional interface a mechanism installed here can
+// implement when it is able to store a stronger hash for an identity it just
+// verified.
+//
+// It is not part of authware's Authenticator, and so not part of Mechanism,
+// because most backends cannot honour one: an LDAP directory is written by the
+// directory team, an htpasswd file is readable-but-not-writable by design, and
+// a third-party identity provider has no interest in this application's work
+// factor. A mechanism that can write declares this interface and gets called
+// after a successful credential check, which is the only moment the plaintext
+// exists to re-hash.
 type PasswordUpgrader interface {
 	// UpgradePassword stores a hash of plaintext for identity when the
 	// stored one is weaker than the mechanism now prefers. It must be a
@@ -172,6 +189,12 @@ type Option func(*Service) error
 // WithMechanism appends a password-verification mechanism. The database
 // mechanism stays in the chain unless WithOnlyMechanisms is used, so an
 // application can add a directory without losing local emergency accounts.
+//
+// The parameter type is authware's Authenticator, which is what lets a backend
+// from authware's own backend packages be handed over as it is:
+//
+//	backend, err := htpasswd.New()
+//	svc, err := auth.New(d, auth.WithMechanism(backend))
 func WithMechanism(m Mechanism) Option {
 	return func(s *Service) error {
 		if m == nil {
@@ -182,9 +205,15 @@ func WithMechanism(m Mechanism) Option {
 	}
 }
 
-// WithOnlyMechanisms replaces the mechanism chain entirely, dropping the
-// database backend. Use it when accounts live somewhere else and a local
+// WithOnlyMechanisms replaces the password mechanism chain entirely, dropping
+// the database backend. Use it when accounts live somewhere else and a local
 // table is a liability rather than a fallback.
+//
+// It says nothing about bearer tokens, deliberately: the two chains are
+// orthogonal, so directory-backed passwords and database-backed machine tokens
+// is a configuration an application can have, each credential type with the
+// revocation story that suits it. Use WithOnlyTokenMechanisms to change the
+// token chain.
 func WithOnlyMechanisms(ms ...Mechanism) Option {
 	return func(s *Service) error {
 		if len(ms) == 0 {
@@ -196,6 +225,61 @@ func WithOnlyMechanisms(ms ...Mechanism) Option {
 			}
 		}
 		s.mechanisms = append([]Mechanism(nil), ms...)
+		return nil
+	}
+}
+
+// WithTokenMechanism appends a bearer-token mechanism. The database mechanism
+// stays in the chain unless WithOnlyTokenMechanisms is used, so an application
+// can validate tokens against an external service while its own API tokens keep
+// working and remain revocable from the admin screen.
+//
+// The parameter type is authware's TokenAuthenticator, so a backend from
+// authware's own backend packages is handed over as it is:
+//
+//	backend, err := apitoken.New()
+//	svc, err := auth.New(d, auth.WithTokenMechanism(backend))
+//
+// A mechanism defines what a token means: its lifetime, where its groups come
+// from, and whether and how it can be revoked before it expires. The framework
+// neither enforces nor inherits those properties, and it does not make a
+// non-database token revocable through Service.RevokeToken, which operates on
+// the rows the database mechanism reads. Whatever guarantee a token needs is
+// the mechanism's business; what the framework does promise is to consult
+// mechanisms in order, stamp the answering mechanism's name on the identity,
+// and normalize it.
+func WithTokenMechanism(m TokenMechanism) Option {
+	return func(s *Service) error {
+		if m == nil {
+			return errors.New("auth: WithTokenMechanism called with nil")
+		}
+		s.tokenMechanisms = append(s.tokenMechanisms, m)
+		return nil
+	}
+}
+
+// WithOnlyTokenMechanisms replaces the bearer-token chain entirely, dropping the
+// database backend. Use it when tokens are validated somewhere else — a service
+// that knows whether it revoked one, a file the platform owns — and a local
+// token table would be a credential store nobody administers rather than a
+// fallback.
+//
+// The application owns the consequences, the largest being that this package's
+// token administration — NewToken, ListTokens, RevokeToken — writes rows no
+// mechanism reads. With the database chain dropped, those calls keep succeeding
+// and stop authenticating anything, which is why replacing the chain is a
+// separate option from appending to it.
+func WithOnlyTokenMechanisms(ms ...TokenMechanism) Option {
+	return func(s *Service) error {
+		if len(ms) == 0 {
+			return errors.New("auth: WithOnlyTokenMechanisms needs at least one mechanism")
+		}
+		for _, m := range ms {
+			if m == nil {
+				return errors.New("auth: WithOnlyTokenMechanisms called with a nil mechanism")
+			}
+		}
+		s.tokenMechanisms = append([]TokenMechanism(nil), ms...)
 		return nil
 	}
 }
@@ -263,6 +347,20 @@ func (s *Service) Mechanisms() []string {
 	return names
 }
 
+// TokenMechanisms returns the installed bearer-token mechanisms, for the same
+// display-and-assert purpose as Mechanisms. The two lists are separate because
+// the chains are: a deployment that authenticates people against a directory and
+// machines against a token file has one name in the first list and a different
+// one in the second, and an admin screen that showed only one of the two would
+// be a screen that lies about who can get in.
+func (s *Service) TokenMechanisms() []string {
+	names := make([]string, 0, len(s.tokenMechanisms))
+	for _, m := range s.tokenMechanisms {
+		names = append(names, m.Name())
+	}
+	return names
+}
+
 // Authenticate checks a username and password against every mechanism in
 // order and returns the authenticated user.
 //
@@ -286,7 +384,7 @@ func (s *Service) Authenticate(ctx context.Context, identity, password string) (
 
 	var errs []error
 	for _, m := range s.mechanisms {
-		switch verifyErr := m.Verify(ctx, identity, password); {
+		switch verifyErr := m.AuthUserPassword(ctx, identity, password); {
 		case verifyErr == nil:
 			// Re-hash if this mechanism's stored hash used a weaker cost than
 			// the package now wants. The upgrade is offered the plaintext it
@@ -298,7 +396,7 @@ func (s *Service) Authenticate(ctx context.Context, identity, password string) (
 						"identity", identity, "mechanism", m.Name(), "error", err)
 				}
 			}
-			groups, groupErr := m.Groups(ctx, identity)
+			groups, groupErr := m.UserGroups(ctx, identity)
 			if groupErr != nil {
 				// The identity is known but groups are unavailable.
 				// Continuing with no groups would silently downgrade the
@@ -310,9 +408,7 @@ func (s *Service) Authenticate(ctx context.Context, identity, password string) (
 			}
 			return User{Identity: identity, Groups: groups, AuthedBy: m.Name()}, nil
 
-		case errors.Is(verifyErr, ErrUnknownAccount),
-			errors.Is(verifyErr, ErrBadCredential),
-			errors.Is(verifyErr, ErrAccountDisabled):
+		case expectedRejection(verifyErr):
 			// Expected outcomes; recorded but never surfaced as themselves.
 			errs = append(errs, fmt.Errorf("%s: %w", m.Name(), verifyErr))
 		default:
@@ -331,7 +427,22 @@ func (s *Service) Authenticate(ctx context.Context, identity, password string) (
 	return User{}, ErrBadCredential
 }
 
-// AuthenticateToken resolves a bearer token.
+// AuthenticateToken resolves a bearer token against the installed token
+// mechanisms in order, the first to accept winning.
+//
+// What a mechanism reports is not taken at face value in one respect: the
+// identity is trimmed and lower-cased, the normalization an account name also
+// gets, because the local principal is a single namespace and profile rows,
+// permission checks, and ownership all key off it. Two of a foreign backend's
+// names that differ only in case therefore become one local identity, and
+// namespacing them is the job of the application that adopted that backend; the
+// alternative, two identity spaces decided by which credential happened to
+// arrive, is worse.
+//
+// Groups are exactly what the mechanism reported. This function consults no
+// store of its own, which is what lets an external token source be authoritative
+// about its own groups; the database mechanism reads memberships itself, so the
+// local path is unchanged.
 func (s *Service) AuthenticateToken(ctx context.Context, token string) (User, error) {
 	token = strings.TrimSpace(token)
 	if token == "" {
@@ -339,14 +450,21 @@ func (s *Service) AuthenticateToken(ctx context.Context, token string) (User, er
 	}
 
 	for _, m := range s.tokenMechanisms {
-		identity, groups, err := m.ResolveToken(ctx, token)
+		resolved, err := m.AuthToken(ctx, token)
 		if err != nil {
 			continue
 		}
+		// Normalized before the emptiness test: a mechanism asserting blank
+		// space has no better claim to be a principal than one asserting nothing.
+		identity := normalizeIdentity(resolved.Identity)
 		if identity == "" {
 			continue
 		}
-		return User{Identity: normalizeIdentity(identity), Groups: groups, AuthedBy: m.Name()}, nil
+		return User{
+			Identity: identity,
+			Groups:   resolved.Groups,
+			AuthedBy: m.Name(),
+		}, nil
 	}
 	return User{}, ErrTokenInvalid
 }
@@ -651,14 +769,14 @@ type dbMechanism struct {
 // Name identifies the mechanism as the local database.
 func (m *dbMechanism) Name() string { return "database" }
 
-// Verify checks a password against the stored bcrypt sum.
+// AuthUserPassword checks a password against the stored bcrypt sum.
 //
 // An unknown identity and a wrong password both return ErrBadCredential
 // after doing the same amount of work. The second part matters: if a
 // nonexistent account returns immediately while an existing one burns a
 // bcrypt round, timing alone answers "does this user exist", which is the
 // enumeration the error message was careful not to provide.
-func (m *dbMechanism) Verify(ctx context.Context, identity, password string) error {
+func (m *dbMechanism) AuthUserPassword(ctx context.Context, identity, password string) error {
 	acct, err := m.store.account(ctx, identity)
 	if err != nil {
 		// Spend the same time as a real verification would.
@@ -683,8 +801,8 @@ func (m *dbMechanism) Verify(ctx context.Context, identity, password string) err
 	return nil
 }
 
-// Groups returns the identity's groups.
-func (m *dbMechanism) Groups(ctx context.Context, identity string) (map[string]struct{}, error) {
+// UserGroups returns the identity's groups.
+func (m *dbMechanism) UserGroups(ctx context.Context, identity string) (map[string]struct{}, error) {
 	return m.store.groups(ctx, identity)
 }
 
@@ -729,23 +847,25 @@ var defaultBurnHash = func() []byte {
 	return sum
 }()
 
-// ResolveToken looks a token up by digest and returns its identity and
-// groups.
-func (m *dbMechanism) ResolveToken(ctx context.Context, token string) (string, map[string]struct{}, error) {
+// AuthToken looks a token up by digest and resolves it to an identity and its
+// groups. AuthedBy is left unset: the Service stamps it, so that the value
+// reports which mechanism in the chain was consulted rather than whatever the
+// backend happened to guess.
+func (m *dbMechanism) AuthToken(ctx context.Context, token string) (authware.User, error) {
 	record, err := m.store.tokenByDigest(ctx, digestToken(token))
 	if err != nil {
-		return "", nil, ErrTokenInvalid
+		return authware.User{}, ErrTokenInvalid
 	}
 	if record.Disabled {
-		return "", nil, ErrTokenInvalid
+		return authware.User{}, ErrTokenInvalid
 	}
 	if record.ExpiresAt != nil && m.clock().After(*record.ExpiresAt) {
-		return "", nil, ErrTokenInvalid
+		return authware.User{}, ErrTokenInvalid
 	}
 
 	groups, err := m.store.groups(ctx, record.Identity)
 	if err != nil {
-		return "", nil, err
+		return authware.User{}, err
 	}
-	return record.Identity, groups, nil
+	return authware.User{Identity: record.Identity, Groups: groups}, nil
 }
