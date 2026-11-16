@@ -17,16 +17,29 @@ Tagging and pushing are both things to do only when asked.
 1. Confirm the tree is clean and green: `make all`. This is fmt, vet, build, and test
    across both modules; a root-module `go test` is not sufficient, because
    `examples/` is a separate module and carries the integration tests.
-2. Move everything under `## Unreleased` in `CHANGELOG.md` into a
+2. Confirm every dependency in `go.mod` resolves to a real tag:
+   ```bash
+   grep -E 'v[0-9]+\.[0-9]+\.[0-9]+-' go.mod   # a pseudo-version shows up here
+   ```
+   A `+` suffix or a `-0.yyyymmdd...` pseudo-version means the framework is about to
+   publish a public API that names an untagged commit of someone else's repository.
+   Tag the dependency (or ask its maintainer to) and re-run `go get <dep>@<tag>`
+   before tagging here. Neither the build nor `make all` notices this; only the proxy's
+   version list does, so `go list -m -versions <dep>` is the check.
+3. Confirm `LICENSE` exists at the repository root. A module published without one is
+   "all rights reserved" to anyone who runs `go get`, and the build gives no warning.
+4. Move everything under `## Unreleased` in `CHANGELOG.md` into a
    `## v<version> - <date>` section. Mark anything that breaks a caller as
    **Breaking**, and for a signature change include the old and new forms in a table:
    a consumer should be able to fix their code from the changelog alone. Add a short
    `### Added`, `### Changed`, or `### Fixed` for the rest, phrased as what changed for
    the person upgrading rather than which files moved.
-3. Leave a fresh empty `## Unreleased` above it.
-4. Commit the changelog and the release content.
-5. Tag it: `git tag v<version>`.
-6. Re-pin the example, which resolves the framework by published version rather than
+5. Leave a fresh empty `## Unreleased` above it.
+6. Commit the changelog and the release content.
+7. Tag it annotated: `git tag -a v<version> -m "webapp v<version>"`. (`v0.0.1` is a
+   lightweight tag; an annotated one carries the release date and who made it, which is
+   the only provenance anyone has months later.)
+8. Re-pin the example, which resolves the framework by published version rather than
    by the working tree:
    ```bash
    cd examples && go get github.com/the-maldridge/webapp@v<version> && go mod tidy
@@ -34,7 +47,7 @@ Tagging and pushing are both things to do only when asked.
    This cannot happen before the tag exists, which is why it is a second commit.
    Confirm with `make vet` that the example still compiles against what was actually
    published.
-7. Do not push. Report the tag and leave pushing to the person who asked.
+9. Do not push. Report the tag and leave pushing to the person who asked.
 
 ## Checks that pay for themselves
 
@@ -44,6 +57,8 @@ Tagging and pushing are both things to do only when asked.
   that was renamed twice is worse than no changelog.
 - If a change alters what a caller must write, `MIGRATING.md` gets a paragraph in the
   same release. It is the document a person hits when the changelog says "breaking".
+- `GOWORK=off go vet ./...` inside `examples/`, which proves the example builds against
+  the published framework rather than whatever the workspace happens to be pointing at.
 
 The Bulma theme is a separate repository with its own tags (`webapp-bulma`); releasing
 this one does not release that one, and an application pinning both may need both

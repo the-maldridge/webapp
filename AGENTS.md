@@ -35,6 +35,8 @@ depends on a theme that depends on the framework; inlining it would close a cycl
 - `github.com/the-maldridge/webapp/examples` — the example application, own module.
 - `github.com/the-maldridge/webapp-bulma` — the Bulma theme, **a different repo**.
   Its templates and vendored CSS are not findable from this checkout.
+- `github.com/the-maldridge/webapp-pico` — the Picocss theme, **a different repo**
+  as well. Same rule: nothing in it is reachable from this checkout by name.
 - `github.com/the-maldridge/authware` — the authentication contract: `Authenticator`,
   `TokenAuthenticator`, `User`, and the backends (`htpasswd`, `ldap`, `pam`,
   `apitoken`, `netauth`). `auth.Mechanism` and `auth.TokenMechanism` are aliases
