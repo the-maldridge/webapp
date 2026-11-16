@@ -1,11 +1,17 @@
 # Changelog
 
 A list of the changes worth knowing about before upgrading. The format follows
-[Keep a Changelog](https://keepachangelog.com/) and this project follows
-[Semantic Versioning](https://semver.org/), with the caveat that anything before
-`v1.0.0` may change without a major version bump.
+[Keep a Changelog](https://keepachangelog.com/).
+
+This is alpha software. The numbers are `[major].[minor].[patch]`, but before `v1.0.0`
+no release is promised to be compatible with the previous one, and a breaking change may
+ship under any of the three positions. The version is not a stability guarantee; the
+entries below it are, which is why breaking changes are marked **Breaking** and given
+the old and new signatures.
 
 ## Unreleased
+
+## v0.0.2 - 2026-11-14
 
 ### Changed
 
@@ -58,6 +64,12 @@ A list of the changes worth knowing about before upgrading. The format follows
   token lifetime and revocation.
 - `auth.Service.TokenMechanisms` reports the names of the configured token
   mechanisms, mirroring `Mechanisms`.
+- Because `auth.TokenMechanism` is `authware.TokenAuthenticator`, this release
+  requires `github.com/the-maldridge/authware` v0.1.7 or later. That is also the
+  version that adds the `apitoken` backend, which now drops into
+  `auth.WithTokenMechanism` with no adapter.
+- The repository carries a `LICENSE` file (ISC). A published Go module without one
+  grants no permission to use it.
 
 ### Fixed
 

@@ -5,10 +5,12 @@ description: Use when cutting a release of the webapp framework, when tagging a 
 
 # Cut a release of webapp
 
-The module is `github.com/the-maldridge/webapp`. Versions follow semantic
-versioning with one stated exception, recorded at the top of `CHANGELOG.md`: before
-`v1.0.0` a breaking change bumps the minor, so the release carrying a breaking change
-after `v0.0.1` is `v0.1.0`.
+The module is `github.com/the-maldridge/webapp`. It is alpha software: the version is
+`[major].[minor].[patch]`, and until `v1.0.0` a breaking change may ship under any of
+those three positions. Take the number from the person asking for the release instead of
+deriving it from semantic versioning, and state the number you cut in the report. What a
+release owes its callers whatever the number says is a `CHANGELOG.md` entry that marks
+breaking changes and shows the old and new signatures.
 
 Tagging and pushing are both things to do only when asked.
 
