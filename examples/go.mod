@@ -10,7 +10,7 @@ module github.com/the-maldridge/webapp/examples
 go 1.26.0
 
 require (
-	github.com/the-maldridge/webapp v0.0.1
+	github.com/the-maldridge/webapp v0.0.2
 	github.com/the-maldridge/webapp-bulma v0.0.1
 	gorm.io/gorm v1.31.2
 )
@@ -26,7 +26,7 @@ require (
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/mattn/go-sqlite3 v1.14.22 // indirect
 	github.com/meehow/securebytes v0.3.1 // indirect
-	github.com/the-maldridge/authware v0.1.7-0.20261013191319-d7308a3fecde // indirect
+	github.com/the-maldridge/authware v0.1.7 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
