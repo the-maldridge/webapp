@@ -6,7 +6,7 @@ require (
 	github.com/flosch/pongo2/v6 v6.1.0
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/meehow/securebytes v0.3.1
-	github.com/the-maldridge/authware v0.1.7-0.20261013191319-d7308a3fecde
+	github.com/the-maldridge/authware v0.1.7
 	golang.org/x/crypto v0.58.0
 	gorm.io/driver/postgres v1.6.3
 	gorm.io/driver/sqlite v1.6.0
